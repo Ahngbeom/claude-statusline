@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.0.0
+# Version: 1.1.0
 # License: MIT
 #
 # Features:
@@ -13,30 +13,50 @@
 # Requirements:
 #   - jq (required): JSON parsing
 #   - ccusage (recommended): Usage statistics via https://github.com/anthropics/ccusage
-#   - gdate (optional): macOS date compatibility
+#
+# Performance notes (v1.1.0):
+#   - All color codes are pre-computed variables (no subshell forks)
+#   - jq calls are consolidated (single call per JSON source)
+#   - to_epoch() uses GNU date first on Linux (no python3 fallback)
+#   - npx synchronous call removed; cache miss shows placeholder
+#   - Background ccusage calls run in parallel
+#   - format_tokens/progress_bar use pure bash (no awk/tr)
 
 input=$(cat)
 
-# ---- color helpers (force colors for Claude Code) ----
-use_color=1
-[ -n "$NO_COLOR" ] && use_color=0
-
-C() { if [ "$use_color" -eq 1 ]; then printf '\033[%sm' "$1"; fi; }
-RST() { if [ "$use_color" -eq 1 ]; then printf '\033[0m'; fi; }
-
-# ---- modern sleek colors ----
-dir_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;117m'; fi; }    # sky blue
-model_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;147m'; fi; }  # light purple
-version_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;180m'; fi; } # soft yellow
-cc_version_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;249m'; fi; } # light gray
-style_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;245m'; fi; } # gray
-rst() { if [ "$use_color" -eq 1 ]; then printf '\033[0m'; fi; }
+# ---- pre-computed color variables (no subshell forks) ----
+if [ -z "$NO_COLOR" ]; then
+  _dir=$'\033[38;5;117m'      # sky blue
+  _model=$'\033[38;5;147m'    # light purple
+  _version=$'\033[38;5;180m'  # soft yellow
+  _ccver=$'\033[38;5;249m'    # light gray
+  _style=$'\033[38;5;245m'    # gray
+  _git=$'\033[38;5;150m'      # soft green
+  _usage=$'\033[38;5;189m'    # lavender
+  _cost=$'\033[38;5;222m'     # light gold
+  _burn=$'\033[38;5;220m'     # bright gold
+  _cache=$'\033[38;5;120m'    # light green
+  _today=$'\033[38;5;153m'    # light blue
+  _week=$'\033[38;5;183m'     # light pink
+  _month=$'\033[38;5;216m'    # light coral
+  _ctx=$'\033[1;37m'          # default white (context - updated dynamically)
+  _rst=$'\033[0m'
+else
+  _dir="" _model="" _version="" _ccver="" _style="" _git=""
+  _usage="" _cost="" _burn="" _cache="" _today="" _week="" _month=""
+  _ctx="" _rst=""
+fi
 
 # ---- time helpers ----
 to_epoch() {
-  ts="$1"
-  if command -v gdate >/dev/null 2>&1; then gdate -d "$ts" +%s 2>/dev/null && return; fi
+  local ts="$1"
+  # GNU date (Linux) - try first, handles ISO 8601 natively
+  date -d "$ts" +%s 2>/dev/null && return
+  # GNU date as gdate (macOS with coreutils)
+  gdate -d "$ts" +%s 2>/dev/null && return
+  # BSD date (macOS native)
   date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "${ts/Z/+0000}" +%s 2>/dev/null && return
+  # Python fallback (last resort)
   python3 - "$ts" <<'PY' 2>/dev/null
 import sys, datetime
 s=sys.argv[1].replace('Z','+00:00')
@@ -45,46 +65,41 @@ PY
 }
 
 fmt_time_hm() {
-  epoch="$1"
+  local epoch="$1"
   if date -r 0 +%s >/dev/null 2>&1; then date -r "$epoch" +"%H:%M"; else date -d "@$epoch" +"%H:%M"; fi
 }
 
+# ---- pure bash progress bar (no tr subprocess) ----
 progress_bar() {
-  pct="${1:-0}"; width="${2:-10}"
+  local pct="${1:-0}" width="${2:-10}"
   [[ "$pct" =~ ^[0-9]+$ ]] || pct=0; ((pct<0))&&pct=0; ((pct>100))&&pct=100
-  filled=$(( pct * width / 100 )); empty=$(( width - filled ))
-  printf '%*s' "$filled" '' | tr ' ' '='
-  printf '%*s' "$empty" '' | tr ' ' '-'
+  local filled=$(( pct * width / 100 ))
+  local empty=$(( width - filled ))
+  local bar="" i
+  for ((i=0; i<filled; i++)); do bar+="="; done
+  for ((i=0; i<empty; i++)); do bar+="-"; done
+  printf '%s' "$bar"
 }
 
-# git utilities
-num_or_zero() { v="$1"; [[ "$v" =~ ^[0-9]+$ ]] && echo "$v" || echo 0; }
-
-# Function to add commas to numbers
-add_commas() {
-  local num="$1"
-  if [[ "$num" =~ ^[0-9]+$ ]]; then
-    printf "%'d" "$num" 2>/dev/null || echo "$num"
-  else
-    echo "$num"
-  fi
-}
-
-# Function to format tokens with K/M units
+# ---- pure bash format_tokens (no awk subprocess) ----
 format_tokens() {
   local num="$1"
   if [[ "$num" =~ ^[0-9]+$ ]]; then
     if [ "$num" -ge 1000000 ]; then
-      awk "BEGIN {printf \"%.2fM\", $num / 1000000}"
+      local whole=$((num / 1000000)) frac=$(( (num % 1000000) / 10000 ))
+      printf '%d.%02dM' "$whole" "$frac"
     elif [ "$num" -ge 1000 ]; then
-      awk "BEGIN {printf \"%.1fK\", $num / 1000}"
+      local whole=$((num / 1000)) frac=$(( (num % 1000) / 100 ))
+      printf '%d.%01dK' "$whole" "$frac"
     else
-      echo "$num"
+      printf '%s' "$num"
     fi
   else
-    echo "$num"
+    printf '%s' "$num"
   fi
 }
+
+num_or_zero() { [[ "$1" =~ ^[0-9]+$ ]] && echo "$1" || echo 0; }
 
 # ---- cache helpers for ccusage data ----
 CACHE_FILE="$HOME/.claude/stats-cache.json"
@@ -92,7 +107,9 @@ CACHE_TTL=60  # 60 seconds
 
 read_cache() {
   if [ -f "$CACHE_FILE" ]; then
+    local cache_ts
     cache_ts=$(jq -r '.timestamp // 0' "$CACHE_FILE" 2>/dev/null)
+    local now_ts
     now_ts=$(date +%s)
     if [ $((now_ts - cache_ts)) -lt $CACHE_TTL ]; then
       cat "$CACHE_FILE"
@@ -102,13 +119,34 @@ read_cache() {
   return 1
 }
 
+# Resolve ccusage command once
+_ccusage_cmd=""
+if command -v ccusage >/dev/null 2>&1; then
+  _ccusage_cmd="ccusage"
+elif command -v npx >/dev/null 2>&1; then
+  _ccusage_cmd="npx --prefer-offline ccusage@latest"
+fi
+
 update_cache_background() {
+  [ -z "$_ccusage_cmd" ] && return
   (
+    local today_date tmpdir
     today_date=$(date +%Y%m%d)
-    blocks=$(npx ccusage@latest blocks --json 2>/dev/null || ccusage blocks --json 2>/dev/null)
-    daily=$(npx ccusage@latest daily --json --since "$today_date" 2>/dev/null || ccusage daily --json --since "$today_date" 2>/dev/null)
-    weekly=$(npx ccusage@latest weekly --json 2>/dev/null || ccusage weekly --json 2>/dev/null)
-    monthly=$(npx ccusage@latest monthly --json 2>/dev/null || ccusage monthly --json 2>/dev/null)
+    tmpdir=$(mktemp -d)
+
+    # Run all 4 ccusage commands in parallel
+    $_ccusage_cmd blocks --json  >"$tmpdir/blocks"  2>/dev/null &
+    $_ccusage_cmd daily  --json --since "$today_date" >"$tmpdir/daily"  2>/dev/null &
+    $_ccusage_cmd weekly --json >"$tmpdir/weekly"  2>/dev/null &
+    $_ccusage_cmd monthly --json >"$tmpdir/monthly" 2>/dev/null &
+    wait
+
+    local blocks daily weekly monthly
+    blocks=$(<"$tmpdir/blocks")
+    daily=$(<"$tmpdir/daily")
+    weekly=$(<"$tmpdir/weekly")
+    monthly=$(<"$tmpdir/monthly")
+    rm -rf "$tmpdir"
 
     # Only write if we got valid data
     if [ -n "$blocks" ]; then
@@ -124,25 +162,28 @@ update_cache_background() {
   ) &
 }
 
-# ---- basics ----
+# ---- parse input with single jq call ----
 if command -v jq >/dev/null 2>&1; then
-  current_dir=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // "unknown"' 2>/dev/null | sed "s|^$HOME|~|g")
-  model_name=$(echo "$input" | jq -r '.model.display_name // "Claude"' 2>/dev/null)
-  model_version=$(echo "$input" | jq -r '.model.version // ""' 2>/dev/null)
-  session_id=$(echo "$input" | jq -r '.session_id // ""' 2>/dev/null)
-  cc_version=$(echo "$input" | jq -r '.version // ""' 2>/dev/null)
-  output_style=$(echo "$input" | jq -r '.output_style.name // ""' 2>/dev/null)
+  _has_jq=1
+  IFS=$'\t' read -r current_dir model_name model_version session_id cc_version output_style < <(
+    printf '%s' "$input" | jq -r '[
+      (.workspace.current_dir // .cwd // "unknown"),
+      (.model.display_name // "Claude"),
+      (.model.version // ""),
+      (.session_id // ""),
+      (.version // ""),
+      (.output_style.name // "")
+    ] | @tsv' 2>/dev/null
+  )
+  current_dir="${current_dir//$HOME/\~}"
 else
+  _has_jq=0
   current_dir="unknown"
   model_name="Claude"; model_version=""
   session_id=""
   cc_version=""
   output_style=""
 fi
-
-# ---- git colors ----
-git_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;150m'; fi; }  # soft green
-rst() { if [ "$use_color" -eq 1 ]; then printf '\033[0m'; fi; }
 
 # ---- git ----
 git_branch=""
@@ -154,31 +195,19 @@ fi
 context_pct=""
 context_used_tokens=""
 context_max_tokens=""
-context_color() { if [ "$use_color" -eq 1 ]; then printf '\033[1;37m'; fi; }  # default white
+context_remaining_pct=""
 
-# Determine max context based on model
 get_max_context() {
-  local model_name="$1"
-  case "$model_name" in
-    *"Opus 4"*|*"opus 4"*|*"Opus"*|*"opus"*)
-      echo "200000"  # 200K for all Opus versions
-      ;;
-    *"Sonnet 4"*|*"sonnet 4"*|*"Sonnet 3.5"*|*"sonnet 3.5"*|*"Sonnet"*|*"sonnet"*)
-      echo "200000"  # 200K for Sonnet 3.5+ and 4.x
-      ;;
-    *"Haiku 3.5"*|*"haiku 3.5"*|*"Haiku 4"*|*"haiku 4"*|*"Haiku"*|*"haiku"*)
-      echo "200000"  # 200K for modern Haiku
-      ;;
-    *"Claude 3 Haiku"*|*"claude 3 haiku"*)
-      echo "100000"  # 100K for original Claude 3 Haiku
-      ;;
-    *)
-      echo "200000"  # Default to 200K
-      ;;
+  case "$1" in
+    *"Opus 4"*|*"opus 4"*|*"Opus"*|*"opus"*)       echo "200000" ;;
+    *"Sonnet 4"*|*"sonnet 4"*|*"Sonnet 3.5"*|*"sonnet 3.5"*|*"Sonnet"*|*"sonnet"*) echo "200000" ;;
+    *"Haiku 3.5"*|*"haiku 3.5"*|*"Haiku 4"*|*"haiku 4"*|*"Haiku"*|*"haiku"*)       echo "200000" ;;
+    *"Claude 3 Haiku"*|*"claude 3 haiku"*) echo "100000" ;;
+    *) echo "200000" ;;
   esac
 }
 
-if [ -n "$session_id" ] && command -v jq >/dev/null 2>&1; then
+if [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
   MAX_CONTEXT=$(get_max_context "$model_name")
 
   # Convert current dir to session file path
@@ -186,40 +215,29 @@ if [ -n "$session_id" ] && command -v jq >/dev/null 2>&1; then
   session_file="$HOME/.claude/projects/-${project_dir}/${session_id}.jsonl"
 
   if [ -f "$session_file" ]; then
-    # Get the latest input token count from the session file
     latest_tokens=$(tail -20 "$session_file" | jq -r 'select(.message.usage) | .message.usage | ((.input_tokens // 0) + (.cache_read_input_tokens // 0))' 2>/dev/null | tail -1)
 
-    if [ -n "$latest_tokens" ] && [ "$latest_tokens" -gt 0 ]; then
+    if [ -n "$latest_tokens" ] && [ "$latest_tokens" -gt 0 ] 2>/dev/null; then
       context_used_tokens="$latest_tokens"
       context_max_tokens="$MAX_CONTEXT"
       context_used_pct=$(( latest_tokens * 100 / MAX_CONTEXT ))
       context_remaining_pct=$(( 100 - context_used_pct ))
 
-      # Set color based on remaining percentage
-      if [ "$context_remaining_pct" -le 20 ]; then
-        context_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;203m'; fi; }  # coral red
-      elif [ "$context_remaining_pct" -le 40 ]; then
-        context_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;215m'; fi; }  # peach
-      else
-        context_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;158m'; fi; }  # mint green
+      # Set context color based on remaining percentage
+      if [ -z "$NO_COLOR" ]; then
+        if [ "$context_remaining_pct" -le 20 ]; then
+          _ctx=$'\033[38;5;203m'    # coral red
+        elif [ "$context_remaining_pct" -le 40 ]; then
+          _ctx=$'\033[38;5;215m'    # peach
+        else
+          _ctx=$'\033[38;5;158m'    # mint green
+        fi
       fi
 
       context_pct="${context_remaining_pct}%"
     fi
   fi
 fi
-
-# ---- usage colors ----
-usage_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;189m'; fi; }  # lavender
-cost_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;222m'; fi; }   # light gold
-burn_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;220m'; fi; }   # bright gold
-session_color() {
-  rem_pct=$(( 100 - session_pct ))
-  if   (( rem_pct <= 10 )); then SCLR='38;5;210'  # light pink
-  elif (( rem_pct <= 25 )); then SCLR='38;5;228'  # light yellow
-  else                          SCLR='38;5;194'; fi  # light green
-  if [ "$use_color" -eq 1 ]; then printf '\033[%sm' "$SCLR"; fi
-}
 
 # ---- ccusage integration ----
 session_txt=""; session_pct=0; session_bar=""
@@ -228,96 +246,113 @@ today_tokens=""; today_cost=""
 week_tokens=""; week_cost=""
 month_tokens=""; month_cost=""
 cache_hit_rate=""
+rh=""; rm_val=""
 
-if command -v jq >/dev/null 2>&1; then
-  # Try to read from cache first
+if [ "$_has_jq" -eq 1 ]; then
   cached_data=""
   if cached_data=$(read_cache); then
-    # Cache hit - use cached data
-    blocks_output=$(echo "$cached_data" | jq '.blocks' 2>/dev/null)
-    daily_output=$(echo "$cached_data" | jq '.daily' 2>/dev/null)
-    weekly_output=$(echo "$cached_data" | jq '.weekly' 2>/dev/null)
-    monthly_output=$(echo "$cached_data" | jq '.monthly' 2>/dev/null)
+    # Cache hit - extract all fields with single jq call
+    IFS=$'\t' read -r blocks_output daily_output weekly_output monthly_output < <(
+      printf '%s' "$cached_data" | jq -r '[
+        (.blocks | tostring),
+        (.daily | tostring),
+        (.weekly | tostring),
+        (.monthly | tostring)
+      ] | @tsv' 2>/dev/null
+    )
   else
-    # Cache miss - fetch blocks synchronously (essential data)
-    blocks_output=$(npx ccusage@latest blocks --json 2>/dev/null || ccusage blocks --json 2>/dev/null)
+    # Cache miss - NO synchronous npx call; trigger background update only
+    blocks_output=""
     daily_output=""
     weekly_output=""
     monthly_output=""
-    # Update cache in background for next time
     update_cache_background
   fi
 
   if [ -n "$blocks_output" ] && [ "$blocks_output" != "null" ]; then
-    active_block=$(echo "$blocks_output" | jq -c '.blocks[] | select(.isActive == true)' 2>/dev/null | head -n1)
-    if [ -n "$active_block" ]; then
-      cost_usd=$(echo "$active_block" | jq -r '.costUSD // empty')
-      cost_per_hour=$(echo "$active_block" | jq -r '.burnRate.costPerHour // empty')
-      tot_tokens=$(echo "$active_block" | jq -r '.totalTokens // empty')
-      tpm=$(echo "$active_block" | jq -r '.burnRate.tokensPerMinute // empty')
+    # Extract active block and all fields with single jq call
+    IFS=$'\t' read -r cost_usd cost_per_hour tot_tokens tpm cache_read cache_creation reset_time_str start_time_str < <(
+      printf '%s' "$blocks_output" | jq -r '
+        (.blocks[] | select(.isActive == true)) |
+        [
+          (.costUSD // ""),
+          (.burnRate.costPerHour // ""),
+          (.totalTokens // ""),
+          (.burnRate.tokensPerMinute // ""),
+          (.tokenCounts.cacheReadInputTokens // 0),
+          (.tokenCounts.cacheCreationInputTokens // 0),
+          (.usageLimitResetTime // .endTime // ""),
+          (.startTime // "")
+        ] | @tsv' 2>/dev/null | head -n1
+    )
 
-      # Cache hit rate calculation
-      cache_read=$(echo "$active_block" | jq -r '.tokenCounts.cacheReadInputTokens // 0' 2>/dev/null)
-      cache_creation=$(echo "$active_block" | jq -r '.tokenCounts.cacheCreationInputTokens // 0' 2>/dev/null)
-      cache_read=$(num_or_zero "$cache_read")
-      cache_creation=$(num_or_zero "$cache_creation")
-      total_cache=$((cache_read + cache_creation))
-      if [ "$total_cache" -gt 0 ]; then
-        cache_hit_rate=$((cache_read * 100 / total_cache))
-      fi
+    # Cache hit rate calculation
+    cache_read=$(num_or_zero "$cache_read")
+    cache_creation=$(num_or_zero "$cache_creation")
+    total_cache=$((cache_read + cache_creation))
+    if [ "$total_cache" -gt 0 ]; then
+      cache_hit_rate=$((cache_read * 100 / total_cache))
+    fi
 
-      # Session time calculation
-      reset_time_str=$(echo "$active_block" | jq -r '.usageLimitResetTime // .endTime // empty')
-      start_time_str=$(echo "$active_block" | jq -r '.startTime // empty')
-
-      if [ -n "$reset_time_str" ] && [ -n "$start_time_str" ]; then
-        start_sec=$(to_epoch "$start_time_str"); end_sec=$(to_epoch "$reset_time_str"); now_sec=$(date +%s)
-        total=$(( end_sec - start_sec )); (( total<1 )) && total=1
-        elapsed=$(( now_sec - start_sec )); (( elapsed<0 ))&&elapsed=0; (( elapsed>total ))&&elapsed=$total
-        session_pct=$(( elapsed * 100 / total ))
-        remaining=$(( end_sec - now_sec )); (( remaining<0 )) && remaining=0
-        rh=$(( remaining / 3600 )); rm=$(( (remaining % 3600) / 60 ))
-        end_hm=$(fmt_time_hm "$end_sec")
-        session_txt="$(printf '%dh %dm until reset at %s (%d%%)' "$rh" "$rm" "$end_hm" "$session_pct")"
-        session_bar=$(progress_bar "$session_pct" 10)
-      fi
+    # Session time calculation
+    if [ -n "$reset_time_str" ] && [ -n "$start_time_str" ]; then
+      start_sec=$(to_epoch "$start_time_str"); end_sec=$(to_epoch "$reset_time_str"); now_sec=$(date +%s)
+      total=$(( end_sec - start_sec )); (( total<1 )) && total=1
+      elapsed=$(( now_sec - start_sec )); (( elapsed<0 ))&&elapsed=0; (( elapsed>total ))&&elapsed=$total
+      session_pct=$(( elapsed * 100 / total ))
+      remaining=$(( end_sec - now_sec )); (( remaining<0 )) && remaining=0
+      rh=$(( remaining / 3600 )); rm_val=$(( (remaining % 3600) / 60 ))
+      end_hm=$(fmt_time_hm "$end_sec")
+      session_txt="$(printf '%dh %dm until reset at %s (%d%%)' "$rh" "$rm_val" "$end_hm" "$session_pct")"
+      session_bar=$(progress_bar "$session_pct" 10)
     fi
   fi
 
-  # Today's daily usage (first element = today)
+  # Daily/Weekly/Monthly - extract with single jq calls
   if [ -n "$daily_output" ] && [ "$daily_output" != "null" ]; then
-    today_tokens=$(echo "$daily_output" | jq -r '.daily[0].totalTokens // empty' 2>/dev/null)
-    today_cost=$(echo "$daily_output" | jq -r '.daily[0].totalCost // empty' 2>/dev/null)
+    IFS=$'\t' read -r today_tokens today_cost < <(
+      printf '%s' "$daily_output" | jq -r '[(.daily[0].totalTokens // ""), (.daily[0].totalCost // "")] | @tsv' 2>/dev/null
+    )
   fi
 
-  # Weekly usage (last element = current week)
   if [ -n "$weekly_output" ] && [ "$weekly_output" != "null" ]; then
-    week_tokens=$(echo "$weekly_output" | jq -r '.weekly[-1].totalTokens // empty' 2>/dev/null)
-    week_cost=$(echo "$weekly_output" | jq -r '.weekly[-1].totalCost // empty' 2>/dev/null)
+    IFS=$'\t' read -r week_tokens week_cost < <(
+      printf '%s' "$weekly_output" | jq -r '[(.weekly[-1].totalTokens // ""), (.weekly[-1].totalCost // "")] | @tsv' 2>/dev/null
+    )
   fi
 
-  # Monthly usage (last element = current month)
   if [ -n "$monthly_output" ] && [ "$monthly_output" != "null" ]; then
-    month_tokens=$(echo "$monthly_output" | jq -r '.monthly[-1].totalTokens // empty' 2>/dev/null)
-    month_cost=$(echo "$monthly_output" | jq -r '.monthly[-1].totalCost // empty' 2>/dev/null)
+    IFS=$'\t' read -r month_tokens month_cost < <(
+      printf '%s' "$monthly_output" | jq -r '[(.monthly[-1].totalTokens // ""), (.monthly[-1].totalCost // "")] | @tsv' 2>/dev/null
+    )
+  fi
+fi
+
+# ---- session color (computed after session_pct is known) ----
+_session=""
+if [ -z "$NO_COLOR" ]; then
+  rem_pct=$(( 100 - session_pct ))
+  if   (( rem_pct <= 10 )); then _session=$'\033[38;5;210m'   # light pink
+  elif (( rem_pct <= 25 )); then _session=$'\033[38;5;228m'   # light yellow
+  else                           _session=$'\033[38;5;194m'   # light green
   fi
 fi
 
 # ---- render statusline ----
 # Line 1: Core info (directory, git, model, claude code version, output style)
-printf '📁 %s%s%s' "$(dir_color)" "$current_dir" "$(rst)"
+printf '📁 %s%s%s' "$_dir" "$current_dir" "$_rst"
 if [ -n "$git_branch" ]; then
-  printf '  🌿 %s%s%s' "$(git_color)" "$git_branch" "$(rst)"
+  printf '  🌿 %s%s%s' "$_git" "$git_branch" "$_rst"
 fi
-printf '  🤖 %s%s%s' "$(model_color)" "$model_name" "$(rst)"
+printf '  🤖 %s%s%s' "$_model" "$model_name" "$_rst"
 if [ -n "$model_version" ] && [ "$model_version" != "null" ]; then
-  printf '  🏷️ %s%s%s' "$(version_color)" "$model_version" "$(rst)"
+  printf '  🏷️ %s%s%s' "$_version" "$model_version" "$_rst"
 fi
 if [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
-  printf '  📟 %sv%s%s' "$(cc_version_color)" "$cc_version" "$(rst)"
+  printf '  📟 %sv%s%s' "$_ccver" "$cc_version" "$_rst"
 fi
 if [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
-  printf '  🎨 %s%s%s' "$(style_color)" "$output_style" "$(rst)"
+  printf '  🎨 %s%s%s' "$_style" "$output_style" "$_rst"
 fi
 
 # Line 2: Context only
@@ -326,10 +361,10 @@ if [ -n "$context_pct" ] && [ -n "$context_used_tokens" ]; then
   context_bar=$(progress_bar "$context_remaining_pct" 10)
   used_formatted=$(format_tokens "$context_used_tokens")
   max_formatted=$(format_tokens "$context_max_tokens")
-  line2="🧠 $(context_color)Context: ${used_formatted} / ${max_formatted} (${context_remaining_pct}%) [${context_bar}]$(rst)"
+  line2="🧠 ${_ctx}Context: ${used_formatted} / ${max_formatted} (${context_remaining_pct}%) [${context_bar}]${_rst}"
 fi
 if [ -z "$line2" ]; then
-  line2="🧠 $(context_color)Context: TBD$(rst)"
+  line2="🧠 ${_ctx}Context: TBD${_rst}"
 fi
 
 # Line 3: Session info (primary + secondary in parentheses)
@@ -343,85 +378,70 @@ if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
 fi
 
 # Primary: Time remaining with gauge (no label)
-if [ -n "$rh" ] || [ -n "$rm" ]; then
+if [ -n "$rh" ] || [ -n "$rm_val" ]; then
   session_bar=$(progress_bar "$session_pct" 10)
-  primary_parts+=("${rh}h ${rm}m [${session_bar}]")
+  primary_parts+=("${rh}h ${rm_val}m [${session_bar}]")
 fi
 
 # Secondary: Cache
-cache_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;120m'; fi; }  # light green
 if [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
   secondary_parts+=("Cache: ${cache_hit_rate}%")
 fi
 
 # Secondary: Speed
 if [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
-  tpm_formatted=$(format_tokens "$(printf '%.0f' "$tpm")")
+  tpm_int=$(printf '%.0f' "$tpm")
+  tpm_formatted=$(format_tokens "$tpm_int")
   secondary_parts+=("Speed: ${tpm_formatted}/min")
 fi
 
 # Build line3
 if [ ${#primary_parts[@]} -gt 0 ]; then
-  line3="⏱️ $(usage_color) Session: $(IFS=' | '; echo "${primary_parts[*]}")"
+  line3="⏱️ ${_usage} Session: $(IFS=' | '; echo "${primary_parts[*]}")"
   if [ ${#secondary_parts[@]} -gt 0 ]; then
     line3="$line3 ($(IFS=', '; echo "${secondary_parts[*]}"))"
   fi
-  line3="$line3$(rst)"
+  line3="$line3${_rst}"
 fi
 
 # Line 4: Daily, Weekly, Monthly usage
 line4=""
-today_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;153m'; fi; }  # light blue
-week_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;183m'; fi; }   # light pink
-month_color() { if [ "$use_color" -eq 1 ]; then printf '\033[38;5;216m'; fi; }  # light coral
 
 # Today's usage
 if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
   today_tokens_formatted=$(format_tokens "$today_tokens")
   if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
     today_cost_formatted=$(printf '%.2f' "$today_cost")
-    line4="📅 $(today_color)Today: ${today_tokens_formatted} (\$${today_cost_formatted})$(rst)"
+    line4="📅 ${_today}Today: ${today_tokens_formatted} (\$${today_cost_formatted})${_rst}"
   else
-    line4="📅 $(today_color)Today: ${today_tokens_formatted}$(rst)"
+    line4="📅 ${_today}Today: ${today_tokens_formatted}${_rst}"
   fi
 fi
 
 # Weekly usage
 if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
   week_tokens_formatted=$(format_tokens "$week_tokens")
+  week_part=""
   if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
     week_cost_formatted=$(printf '%.2f' "$week_cost")
-    if [ -n "$line4" ]; then
-      line4="$line4  📆 $(week_color)Week: ${week_tokens_formatted} (\$${week_cost_formatted})$(rst)"
-    else
-      line4="📆 $(week_color)Week: ${week_tokens_formatted} (\$${week_cost_formatted})$(rst)"
-    fi
+    week_part="📆 ${_week}Week: ${week_tokens_formatted} (\$${week_cost_formatted})${_rst}"
   else
-    if [ -n "$line4" ]; then
-      line4="$line4  📆 $(week_color)Week: ${week_tokens_formatted}$(rst)"
-    else
-      line4="📆 $(week_color)Week: ${week_tokens_formatted}$(rst)"
-    fi
+    week_part="📆 ${_week}Week: ${week_tokens_formatted}${_rst}"
   fi
+  if [ -n "$line4" ]; then line4="$line4  $week_part"; else line4="$week_part"; fi
 fi
 
 # Monthly usage
 if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
   month_tokens_formatted=$(format_tokens "$month_tokens")
+  month_part=""
   if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
     month_cost_formatted=$(printf '%.2f' "$month_cost")
-    if [ -n "$line4" ]; then
-      line4="$line4  🗓️ $(month_color)Month: ${month_tokens_formatted} (\$${month_cost_formatted})$(rst)"
-    else
-      line4="🗓️ $(month_color)Month: ${month_tokens_formatted} (\$${month_cost_formatted})$(rst)"
-    fi
+    month_part="🗓️ ${_month}Month: ${month_tokens_formatted} (\$${month_cost_formatted})${_rst}"
   else
-    if [ -n "$line4" ]; then
-      line4="$line4  🗓️ $(month_color)Month: ${month_tokens_formatted}$(rst)"
-    else
-      line4="🗓️ $(month_color)Month: ${month_tokens_formatted}$(rst)"
-    fi
+    month_part="🗓️ ${_month}Month: ${month_tokens_formatted}${_rst}"
   fi
+  if [ -n "$line4" ]; then line4="$line4  $month_part"; else line4="$month_part"; fi
 fi
 
 # Print lines
