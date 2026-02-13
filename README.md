@@ -14,18 +14,22 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 
 | Line | Content / 내용 |
 |------|----------------|
-| 1 | 📁 Directory, 🌿 Git branch, 🤖 Model, 🏷️ Version, 📟 CLI version, 🎨 Output style |
-| 2 | 🧠 Context window usage with progress bar |
-| 3 | ⏱️ Session info (tokens, time remaining, cache hit rate, speed) |
-| 4 | 📅 Daily / 📆 Weekly / 🗓️ Monthly usage & costs |
+| 1 | 📂 Directory + Git branch │ Model, CLI version, Output style |
+| 2 | 🧠 Context usage (▰▱ bar) │ Session time + tokens │ 🗄 Cache + Speed |
+| 3 | 💰 Today │ Week │ Month usage & costs |
 
 ### Example Output / 예시 출력
 
 ```
-📁 ~/projects/myapp  🌿 main  🤖 Claude Opus 4.5  🏷️ claude-opus-4-5-20251101  📟 v1.0.44  🎨 explanatory
-🧠 Context: 45.2K / 200K (77%) [========--]
-⏱️ Session: 1.2M | 3h 42m [====------] (Cache: 87%, Speed: 12.5K/min)
-📅 Today: 2.1M ($4.32)  📆 Week: 15.8M ($31.20)  🗓️ Month: 48.2M ($95.50)
+📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory
+🧠 Context 45.2K/200K ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ 77% │ Session 1.2M  3h 42m ▰▰▰▰▱▱▱▱▱▱ │ 🗄 87%  12.5K/m
+💰 Today 2.1M  $4.32 │ Week 15.8M  $31.20 │ Month 48.2M  $95.50
+```
+
+Graceful degradation (without ccusage / ccusage 없이):
+```
+📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory
+🧠 Context 45.2K/200K ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ 77%
 ```
 
 ---
@@ -136,9 +140,12 @@ export NO_COLOR=1
 
 ### Modify Progress Bar Width / 프로그레스 바 너비 수정
 
-Find the `progress_bar` function and change the width parameter:
+The progress bar uses `▰` (filled) and `▱` (empty) characters. Find calls to `progress_bar` and change the width:
+
+프로그레스 바는 `▰` (채움)과 `▱` (빈칸) 문자를 사용합니다:
 ```bash
-progress_bar "$pct" 20  # Default is 10
+progress_bar "$pct" 20  # Context bar (default 20)
+progress_bar "$pct" 10  # Session bar (default 10)
 ```
 
 ### Cache TTL / 캐시 유효시간

@@ -5,10 +5,9 @@
 # License: MIT
 #
 # Features:
-#   Line 1: Directory, Git branch, Model name, Version, Output style
-#   Line 2: Context window usage with progress bar
-#   Line 3: Session info (tokens, time remaining, cache hit rate, speed)
-#   Line 4: Daily/Weekly/Monthly usage and costs
+#   Line 1: Directory + Git branch │ Model, CLI version, Output style
+#   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed
+#   Line 3: Daily │ Weekly │ Monthly usage and costs
 #
 # Requirements:
 #   - jq (required): JSON parsing
@@ -40,11 +39,12 @@ if [ -z "$NO_COLOR" ]; then
   _week=$'\033[38;5;183m'     # light pink
   _month=$'\033[38;5;216m'    # light coral
   _ctx=$'\033[1;37m'          # default white (context - updated dynamically)
+  _sep=$'\033[38;5;240m'      # dim gray separator
   _rst=$'\033[0m'
 else
   _dir="" _model="" _version="" _ccver="" _style="" _git=""
   _usage="" _cost="" _burn="" _cache="" _today="" _week="" _month=""
-  _ctx="" _rst=""
+  _ctx="" _sep="" _rst=""
 fi
 
 # ---- time helpers ----
@@ -76,8 +76,8 @@ progress_bar() {
   local filled=$(( pct * width / 100 ))
   local empty=$(( width - filled ))
   local bar="" i
-  for ((i=0; i<filled; i++)); do bar+="="; done
-  for ((i=0; i<empty; i++)); do bar+="-"; done
+  for ((i=0; i<filled; i++)); do bar+="▰"; done
+  for ((i=0; i<empty; i++)); do bar+="▱"; done
   printf '%s' "$bar"
 }
 
@@ -165,21 +165,20 @@ update_cache_background() {
 # ---- parse input with single jq call ----
 if command -v jq >/dev/null 2>&1; then
   _has_jq=1
-  IFS=$'\t' read -r current_dir model_name model_version session_id cc_version output_style < <(
+  IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style < <(
     printf '%s' "$input" | jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
-      (.model.version // ""),
       (.session_id // ""),
       (.version // ""),
       (.output_style.name // "")
-    ] | @tsv' 2>/dev/null
+    ] | join("\u001f")' 2>/dev/null
   )
   current_dir="${current_dir//$HOME/\~}"
 else
   _has_jq=0
   current_dir="unknown"
-  model_name="Claude"; model_version=""
+  model_name="Claude"
   session_id=""
   cc_version=""
   output_style=""
@@ -339,109 +338,98 @@ if [ -z "$NO_COLOR" ]; then
 fi
 
 # ---- render statusline ----
-# Line 1: Core info (directory, git, model, claude code version, output style)
-printf '📁 %s%s%s' "$_dir" "$current_dir" "$_rst"
+# Line 1: 📂 dir  branch │ model  cc_ver  style
+printf '📂 %s%s%s' "$_dir" "$current_dir" "$_rst"
 if [ -n "$git_branch" ]; then
-  printf '  🌿 %s%s%s' "$_git" "$git_branch" "$_rst"
+  printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
 fi
-printf '  🤖 %s%s%s' "$_model" "$model_name" "$_rst"
-if [ -n "$model_version" ] && [ "$model_version" != "null" ]; then
-  printf '  🏷️ %s%s%s' "$_version" "$model_version" "$_rst"
-fi
+printf '  %s│%s' "$_sep" "$_rst"
+printf ' %s%s%s' "$_model" "$model_name" "$_rst"
 if [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
-  printf '  📟 %sv%s%s' "$_ccver" "$cc_version" "$_rst"
+  printf '  %sv%s%s' "$_ccver" "$cc_version" "$_rst"
 fi
 if [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
-  printf '  🎨 %s%s%s' "$_style" "$output_style" "$_rst"
+  printf '  %s%s%s' "$_style" "$output_style" "$_rst"
 fi
 
-# Line 2: Context only
-line2=""
+# Line 2: 🧠 Context ... │ Session ... │ 🗄 cache  speed
+# Build each section independently, then join with │ separators
+ctx_part=""
 if [ -n "$context_pct" ] && [ -n "$context_used_tokens" ]; then
-  context_bar=$(progress_bar "$context_remaining_pct" 10)
+  context_bar=$(progress_bar "$context_remaining_pct" 20)
   used_formatted=$(format_tokens "$context_used_tokens")
   max_formatted=$(format_tokens "$context_max_tokens")
-  line2="🧠 ${_ctx}Context: ${used_formatted} / ${max_formatted} (${context_remaining_pct}%) [${context_bar}]${_rst}"
-fi
-if [ -z "$line2" ]; then
-  line2="🧠 ${_ctx}Context: TBD${_rst}"
+  ctx_part="🧠 ${_ctx}Context ${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
+else
+  ctx_part="🧠 ${_ctx}Context ···${_rst}"
 fi
 
-# Line 3: Session info (primary + secondary in parentheses)
-line3=""
-primary_parts=()
-secondary_parts=()
-
-# Primary: Tokens (no label)
+sess_part=""
 if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
-  primary_parts+=("$(format_tokens "$tot_tokens")")
+  tot_formatted=$(format_tokens "$tot_tokens")
+  if [ -n "$rh" ] || [ -n "$rm_val" ]; then
+    session_bar=$(progress_bar "$session_pct" 10)
+    sess_part="${_session}Session ${tot_formatted}  ${rh}h ${rm_val}m ${session_bar}${_rst}"
+  else
+    sess_part="${_session}Session ${tot_formatted}${_rst}"
+  fi
 fi
 
-# Primary: Time remaining with gauge (no label)
-if [ -n "$rh" ] || [ -n "$rm_val" ]; then
-  session_bar=$(progress_bar "$session_pct" 10)
-  primary_parts+=("${rh}h ${rm_val}m [${session_bar}]")
-fi
-
-# Secondary: Cache
+meta_part=""
 if [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
-  secondary_parts+=("Cache: ${cache_hit_rate}%")
+  meta_part="🗄 ${_cache}${cache_hit_rate}%${_rst}"
 fi
-
-# Secondary: Speed
 if [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
   tpm_int=$(printf '%.0f' "$tpm")
   tpm_formatted=$(format_tokens "$tpm_int")
-  secondary_parts+=("Speed: ${tpm_formatted}/min")
-fi
-
-# Build line3
-if [ ${#primary_parts[@]} -gt 0 ]; then
-  line3="⏱️ ${_usage} Session: $(IFS=' | '; echo "${primary_parts[*]}")"
-  if [ ${#secondary_parts[@]} -gt 0 ]; then
-    line3="$line3 ($(IFS=', '; echo "${secondary_parts[*]}"))"
+  if [ -n "$meta_part" ]; then
+    meta_part="${meta_part}  ${_cache}${tpm_formatted}/m${_rst}"
+  else
+    meta_part="${_cache}${tpm_formatted}/m${_rst}"
   fi
-  line3="$line3${_rst}"
 fi
 
-# Line 4: Daily, Weekly, Monthly usage
-line4=""
+# Assemble line2
+line2="$ctx_part"
+if [ -n "$sess_part" ]; then
+  line2="${line2}  ${_sep}│${_rst} ${sess_part}"
+fi
+if [ -n "$meta_part" ]; then
+  line2="${line2}  ${_sep}│${_rst} ${meta_part}"
+fi
 
-# Today's usage
+# Line 3: 💰 Today ... │ Week ... │ Month ...
+line3=""
 if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
   today_tokens_formatted=$(format_tokens "$today_tokens")
   if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
     today_cost_formatted=$(printf '%.2f' "$today_cost")
-    line4="📅 ${_today}Today: ${today_tokens_formatted} (\$${today_cost_formatted})${_rst}"
+    line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
   else
-    line4="📅 ${_today}Today: ${today_tokens_formatted}${_rst}"
+    line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
   fi
 fi
 
-# Weekly usage
 if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
   week_tokens_formatted=$(format_tokens "$week_tokens")
-  week_part=""
   if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
     week_cost_formatted=$(printf '%.2f' "$week_cost")
-    week_part="📆 ${_week}Week: ${week_tokens_formatted} (\$${week_cost_formatted})${_rst}"
+    week_part="${_week}Week ${week_tokens_formatted}  \$${week_cost_formatted}${_rst}"
   else
-    week_part="📆 ${_week}Week: ${week_tokens_formatted}${_rst}"
+    week_part="${_week}Week ${week_tokens_formatted}${_rst}"
   fi
-  if [ -n "$line4" ]; then line4="$line4  $week_part"; else line4="$week_part"; fi
+  if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${week_part}"; else line3="${week_part}"; fi
 fi
 
-# Monthly usage
 if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
   month_tokens_formatted=$(format_tokens "$month_tokens")
-  month_part=""
   if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
     month_cost_formatted=$(printf '%.2f' "$month_cost")
-    month_part="🗓️ ${_month}Month: ${month_tokens_formatted} (\$${month_cost_formatted})${_rst}"
+    month_part="${_month}Month ${month_tokens_formatted}  \$${month_cost_formatted}${_rst}"
   else
-    month_part="🗓️ ${_month}Month: ${month_tokens_formatted}${_rst}"
+    month_part="${_month}Month ${month_tokens_formatted}${_rst}"
   fi
-  if [ -n "$line4" ]; then line4="$line4  $month_part"; else line4="$month_part"; fi
+  if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${month_part}"; else line3="${month_part}"; fi
 fi
 
 # Print lines
@@ -450,8 +438,5 @@ if [ -n "$line2" ]; then
 fi
 if [ -n "$line3" ]; then
   printf '\n%s' "$line3"
-fi
-if [ -n "$line4" ]; then
-  printf '\n%s' "$line4"
 fi
 printf '\n'
