@@ -1,5 +1,7 @@
 # claude-statusline
 
+[![GitHub Release](https://img.shields.io/github/v/release/ahngbeom/claude-statusline)](https://github.com/Ahngbeom/claude-statusline/releases)
+
 A detailed, informative statusline for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
 
 Claude Code CLI를 위한 상세한 상태 표시줄입니다.
