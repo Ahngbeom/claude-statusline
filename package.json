@@ -1,0 +1,35 @@
+{
+  "name": "@ahngbeom/claude-statusline",
+  "version": "1.1.0",
+  "description": "A detailed 3-line statusline for Claude Code CLI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ahngbeom/claude-statusline.git"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "statusline",
+    "cli",
+    "terminal",
+    "bash"
+  ],
+  "files": [
+    "statusline.sh",
+    "scripts/",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "bash scripts/postinstall.sh",
+    "preuninstall": "bash scripts/preuninstall.sh"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}

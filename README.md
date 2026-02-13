@@ -64,12 +64,33 @@ Edit `~/.claude/settings.json`:
 
 3. Restart Claude Code / Claude Code 재시작
 
+### npm Install (GitHub Packages)
+
+> **Note:** GitHub Packages requires authentication.
+> You need a GitHub [Personal Access Token](https://github.com/settings/tokens) with `read:packages` scope.
+
+1. Configure npm:
+   ```bash
+   echo "@ahngbeom:registry=https://npm.pkg.github.com" >> ~/.npmrc
+   echo "//npm.pkg.github.com/:_authToken=YOUR_TOKEN" >> ~/.npmrc
+   ```
+
+2. Install:
+   ```bash
+   npm install -g @ahngbeom/claude-statusline
+   ```
+
 ---
 
 ## Uninstall / 제거
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ahngbeom/claude-statusline/main/uninstall.sh | bash
+```
+
+Or if installed via npm / npm으로 설치한 경우:
+```bash
+npm uninstall -g @ahngbeom/claude-statusline
 ```
 
 ---

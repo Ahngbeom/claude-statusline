@@ -98,3 +98,6 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - 릴리즈 생성: `gh release create vX.Y.Z --title "vX.Y.Z" --notes "..."`
 - 릴리즈 노트 구성: 프로젝트 소개 1줄, Features, Installation one-liner, Changes since 이전 버전, Requirements
 - install.sh URL은 `main` 브랜치 고정 (태그별 URL 아님)
+- `package.json` 버전은 `statusline.sh` 헤더와 반드시 동기화
+- GitHub Release 생성 시 `.github/workflows/publish.yml`이 GitHub Packages에 자동 발행
+- 릴리즈 전 3곳 버전 일치 확인 필수: `statusline.sh` 헤더, `package.json`, git 태그

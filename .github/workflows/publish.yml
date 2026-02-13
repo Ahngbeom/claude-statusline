@@ -1,0 +1,34 @@
+name: Publish to GitHub Packages
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@ahngbeom'
+
+      - name: Verify version consistency
+        run: |
+          pkg_version=$(node -p "require('./package.json').version")
+          sh_version=$(grep '^# Version:' statusline.sh | awk '{print $3}')
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$pkg_version" != "$sh_version" ] || [ "$pkg_version" != "$tag_version" ]; then
+            echo "ERROR: Version mismatch! pkg=$pkg_version sh=$sh_version tag=$tag_version"
+            exit 1
+          fi
+
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
