@@ -25,9 +25,13 @@ fi
 if [ -f "$SETTINGS_FILE" ]; then
   if command -v jq &>/dev/null; then
     trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
-    jq 'del(.statusline)' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp"
-    mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
-    echo "claude-statusline: cleaned $SETTINGS_FILE"
+    if jq 'del(.statusline)' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" 2>/dev/null; then
+      mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
+      echo "claude-statusline: cleaned $SETTINGS_FILE"
+    else
+      rm -f "$SETTINGS_FILE.tmp"
+      echo "claude-statusline: WARNING - failed to update $SETTINGS_FILE"
+    fi
   else
     echo "claude-statusline: WARNING - jq not found, please manually remove 'statusline' from $SETTINGS_FILE"
   fi

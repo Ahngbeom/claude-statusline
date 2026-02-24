@@ -48,7 +48,7 @@ else
 fi
 
 # ---- time helpers ----
-# Platform detection for to_epoch (one-time cost at startup, avoids per-call fork failures)
+# Platform detection for to_epoch (one-time per invocation, eliminates redundant detection on each call)
 if date -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
   to_epoch() { date -d "$1" +%s; }
 elif command -v gdate >/dev/null 2>&1 && gdate -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
@@ -57,6 +57,13 @@ elif date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "2024-01-01T00:00:00+0000" +%s >/dev/nu
   to_epoch() { date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "${1/Z/+0000}" +%s; }
 else
   to_epoch() { python3 -c "import sys,datetime; s=sys.argv[1].replace('Z','+00:00'); print(int(datetime.datetime.fromisoformat(s).timestamp()))" "$1"; }
+fi
+
+# Platform detection for file mtime (same pattern as to_epoch)
+if stat -f %m / >/dev/null 2>&1; then
+  _file_mtime() { stat -f %m "$1" 2>/dev/null; }
+else
+  _file_mtime() { stat -c %Y "$1" 2>/dev/null; }
 fi
 
 fmt_time_hm() {
@@ -101,19 +108,20 @@ CACHE_FILE="$HOME/.claude/stats-cache.json"
 LOCK_DIR="$CACHE_FILE.lock"
 CACHE_TTL=60  # 60 seconds
 
+cleanup_stale_lock() {
+  [ -d "$LOCK_DIR" ] || return 0
+  local lock_mtime lock_age
+  lock_mtime=$(_file_mtime "$LOCK_DIR")
+  [ -n "$lock_mtime" ] || return 0  # stat 실패 시 안전하게 skip
+  lock_age=$(( $(date +%s) - lock_mtime ))
+  [ "$lock_age" -gt 120 ] && rm -rf "$LOCK_DIR"
+}
+
 read_cache() {
-  # Clean up stale lock (> 2 minutes old) left by crashed processes
-  if [ -d "$LOCK_DIR" ]; then
-    local lock_mtime lock_age
-    lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
-    lock_age=$(( $(date +%s) - lock_mtime ))
-    if [ "$lock_age" -gt 120 ]; then
-      rm -rf "$LOCK_DIR"
-    fi
-  fi
   if [ -f "$CACHE_FILE" ]; then
     local file_mtime file_age
-    file_mtime=$(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)
+    file_mtime=$(_file_mtime "$CACHE_FILE")
+    [ -n "$file_mtime" ] || return 1  # stat 실패 → 캐시 무효
     file_age=$(( $(date +%s) - file_mtime ))
     if [ "$file_age" -lt "$CACHE_TTL" ]; then
       cat "$CACHE_FILE"
@@ -134,21 +142,20 @@ fi
 update_cache_background() {
   [ -z "$_ccusage_cmd" ] && return
   (
-    # mkdir atomic lock: exit immediately if another update is already running
+    # Exclusive lock: skip silently if another update is in progress
     mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    trap 'rm -rf "$tmpdir" "$LOCK_DIR"' EXIT
+    local tmpdir _tmp_cache=""
+    tmpdir=$(mktemp -d) || { rm -rf "$LOCK_DIR"; exit 1; }
+    trap 'rm -rf "$tmpdir" "$LOCK_DIR" ${_tmp_cache:+"$_tmp_cache"}' EXIT
 
     local today_date
     today_date=$(date +%Y%m%d)
 
-    # Detect timeout command (not available on all macOS installs without coreutils)
+    # Optional timeout (coreutils timeout may not be available on macOS)
     local _to=""
     command -v timeout >/dev/null 2>&1 && _to="timeout 30"
 
-    # Run all 4 ccusage commands in parallel with optional 30s timeout
     $_to $_ccusage_cmd blocks --json  >"$tmpdir/blocks"  2>/dev/null &
     $_to $_ccusage_cmd daily  --json --since "$today_date" >"$tmpdir/daily"  2>/dev/null &
     $_to $_ccusage_cmd weekly --json >"$tmpdir/weekly"  2>/dev/null &
@@ -157,29 +164,25 @@ update_cache_background() {
 
     local blocks daily weekly monthly
     blocks=$(<"$tmpdir/blocks")
+    [ -z "$blocks" ] && exit 0
+
     daily=$(<"$tmpdir/daily")
     weekly=$(<"$tmpdir/weekly")
     monthly=$(<"$tmpdir/monthly")
 
-    # Atomic write: write to temp file then rename (prevents partial reads by concurrent sessions)
-    if [ -n "$blocks" ]; then
-      local _tmp_cache
-      _tmp_cache=$(mktemp "$CACHE_FILE.XXXXXX")
-      trap 'rm -rf "$tmpdir" "$LOCK_DIR" "$_tmp_cache"' EXIT
-      if jq -n \
-        --argjson ts "$(date +%s)" \
-        --argjson blocks "$blocks" \
-        --argjson daily "${daily:-null}" \
-        --argjson weekly "${weekly:-null}" \
-        --argjson monthly "${monthly:-null}" \
-        '{timestamp: $ts, blocks: $blocks, daily: $daily, weekly: $weekly, monthly: $monthly}' \
-        > "$_tmp_cache" 2>/dev/null; then
-        mv "$_tmp_cache" "$CACHE_FILE"
-      else
-        rm -f "$_tmp_cache"
-      fi
+    # Atomic write: temp file in same directory ensures rename(2) atomicity
+    _tmp_cache=$(mktemp "$CACHE_FILE.XXXXXX")
+    if jq -n \
+      --argjson ts "$(date +%s)" \
+      --argjson blocks "$blocks" \
+      --argjson daily "${daily:-null}" \
+      --argjson weekly "${weekly:-null}" \
+      --argjson monthly "${monthly:-null}" \
+      '{timestamp: $ts, blocks: $blocks, daily: $daily, weekly: $weekly, monthly: $monthly}' \
+      > "$_tmp_cache" 2>/dev/null; then
+      mv "$_tmp_cache" "$CACHE_FILE"
+      _tmp_cache=""  # mv 성공 후 trap에서 삭제 불필요
     fi
-    # trap EXIT cleans up $tmpdir and $LOCK_DIR
   ) &
 }
 
@@ -270,6 +273,7 @@ rh=""; rm_val=""
 
 if [ "$_has_jq" -eq 1 ]; then
   cached_data=""
+  cleanup_stale_lock
   if cached_data=$(read_cache); then
     # Cache hit - extract all fields with single jq call
     IFS=$'\t' read -r blocks_output daily_output weekly_output monthly_output < <(
