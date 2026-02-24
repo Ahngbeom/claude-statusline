@@ -24,6 +24,7 @@ fi
 # Remove statusline setting from settings.json
 if [ -f "$SETTINGS_FILE" ]; then
   if command -v jq &>/dev/null; then
+    trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
     jq 'del(.statusline)' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp"
     mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
     echo "claude-statusline: cleaned $SETTINGS_FILE"

@@ -66,6 +66,7 @@ update_settings() {
   if [ -f "$SETTINGS_FILE" ]; then
     if command -v jq &>/dev/null; then
       # Remove statusline setting
+      trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
       jq 'del(.statusline)' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp"
       mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
       print_success "Removed statusline setting from $SETTINGS_FILE"

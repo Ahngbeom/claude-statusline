@@ -105,6 +105,7 @@ update_settings() {
     cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
 
     # Add or update statusline setting
+    trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
     jq '.statusline = "~/.claude/statusline.sh"' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp"
     mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 

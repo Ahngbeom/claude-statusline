@@ -32,6 +32,7 @@ echo "claude-statusline: installed $STATUSLINE_FILE"
 if command -v jq &>/dev/null; then
   if [ -f "$SETTINGS_FILE" ]; then
     cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
+    trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
     jq '.statusline = "~/.claude/statusline.sh"' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp"
     mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
   else
