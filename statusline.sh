@@ -48,21 +48,16 @@ else
 fi
 
 # ---- time helpers ----
-to_epoch() {
-  local ts="$1"
-  # GNU date (Linux) - try first, handles ISO 8601 natively
-  date -d "$ts" +%s 2>/dev/null && return
-  # GNU date as gdate (macOS with coreutils)
-  gdate -d "$ts" +%s 2>/dev/null && return
-  # BSD date (macOS native)
-  date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "${ts/Z/+0000}" +%s 2>/dev/null && return
-  # Python fallback (last resort)
-  python3 - "$ts" <<'PY' 2>/dev/null
-import sys, datetime
-s=sys.argv[1].replace('Z','+00:00')
-print(int(datetime.datetime.fromisoformat(s).timestamp()))
-PY
-}
+# Platform detection for to_epoch (one-time cost at startup, avoids per-call fork failures)
+if date -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
+  to_epoch() { date -d "$1" +%s; }
+elif command -v gdate >/dev/null 2>&1 && gdate -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
+  to_epoch() { gdate -d "$1" +%s; }
+elif date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "2024-01-01T00:00:00+0000" +%s >/dev/null 2>&1; then
+  to_epoch() { date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "${1/Z/+0000}" +%s; }
+else
+  to_epoch() { python3 -c "import sys,datetime; s=sys.argv[1].replace('Z','+00:00'); print(int(datetime.datetime.fromisoformat(s).timestamp()))" "$1"; }
+fi
 
 fmt_time_hm() {
   local epoch="$1"
@@ -103,15 +98,24 @@ num_or_zero() { [[ "$1" =~ ^[0-9]+$ ]] && echo "$1" || echo 0; }
 
 # ---- cache helpers for ccusage data ----
 CACHE_FILE="$HOME/.claude/stats-cache.json"
+LOCK_DIR="$CACHE_FILE.lock"
 CACHE_TTL=60  # 60 seconds
 
 read_cache() {
+  # Clean up stale lock (> 2 minutes old) left by crashed processes
+  if [ -d "$LOCK_DIR" ]; then
+    local lock_mtime lock_age
+    lock_mtime=$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)
+    lock_age=$(( $(date +%s) - lock_mtime ))
+    if [ "$lock_age" -gt 120 ]; then
+      rm -rf "$LOCK_DIR"
+    fi
+  fi
   if [ -f "$CACHE_FILE" ]; then
-    local cache_ts
-    cache_ts=$(jq -r '.timestamp // 0' "$CACHE_FILE" 2>/dev/null)
-    local now_ts
-    now_ts=$(date +%s)
-    if [ $((now_ts - cache_ts)) -lt $CACHE_TTL ]; then
+    local file_mtime file_age
+    file_mtime=$(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)
+    file_age=$(( $(date +%s) - file_mtime ))
+    if [ "$file_age" -lt "$CACHE_TTL" ]; then
       cat "$CACHE_FILE"
       return 0
     fi
@@ -130,15 +134,25 @@ fi
 update_cache_background() {
   [ -z "$_ccusage_cmd" ] && return
   (
-    local today_date tmpdir
-    today_date=$(date +%Y%m%d)
-    tmpdir=$(mktemp -d)
+    # mkdir atomic lock: exit immediately if another update is already running
+    mkdir "$LOCK_DIR" 2>/dev/null || exit 0
 
-    # Run all 4 ccusage commands in parallel
-    $_ccusage_cmd blocks --json  >"$tmpdir/blocks"  2>/dev/null &
-    $_ccusage_cmd daily  --json --since "$today_date" >"$tmpdir/daily"  2>/dev/null &
-    $_ccusage_cmd weekly --json >"$tmpdir/weekly"  2>/dev/null &
-    $_ccusage_cmd monthly --json >"$tmpdir/monthly" 2>/dev/null &
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir" "$LOCK_DIR"' EXIT
+
+    local today_date
+    today_date=$(date +%Y%m%d)
+
+    # Detect timeout command (not available on all macOS installs without coreutils)
+    local _to=""
+    command -v timeout >/dev/null 2>&1 && _to="timeout 30"
+
+    # Run all 4 ccusage commands in parallel with optional 30s timeout
+    $_to $_ccusage_cmd blocks --json  >"$tmpdir/blocks"  2>/dev/null &
+    $_to $_ccusage_cmd daily  --json --since "$today_date" >"$tmpdir/daily"  2>/dev/null &
+    $_to $_ccusage_cmd weekly --json >"$tmpdir/weekly"  2>/dev/null &
+    $_to $_ccusage_cmd monthly --json >"$tmpdir/monthly" 2>/dev/null &
     wait
 
     local blocks daily weekly monthly
@@ -146,19 +160,26 @@ update_cache_background() {
     daily=$(<"$tmpdir/daily")
     weekly=$(<"$tmpdir/weekly")
     monthly=$(<"$tmpdir/monthly")
-    rm -rf "$tmpdir"
 
-    # Only write if we got valid data
+    # Atomic write: write to temp file then rename (prevents partial reads by concurrent sessions)
     if [ -n "$blocks" ]; then
-      jq -n \
+      local _tmp_cache
+      _tmp_cache=$(mktemp "$CACHE_FILE.XXXXXX")
+      trap 'rm -rf "$tmpdir" "$LOCK_DIR" "$_tmp_cache"' EXIT
+      if jq -n \
         --argjson ts "$(date +%s)" \
         --argjson blocks "$blocks" \
         --argjson daily "${daily:-null}" \
         --argjson weekly "${weekly:-null}" \
         --argjson monthly "${monthly:-null}" \
         '{timestamp: $ts, blocks: $blocks, daily: $daily, weekly: $weekly, monthly: $monthly}' \
-        > "$CACHE_FILE" 2>/dev/null
+        > "$_tmp_cache" 2>/dev/null; then
+        mv "$_tmp_cache" "$CACHE_FILE"
+      else
+        rm -f "$_tmp_cache"
+      fi
     fi
+    # trap EXIT cleans up $tmpdir and $LOCK_DIR
   ) &
 }
 
