@@ -174,7 +174,7 @@ if command -v jq >/dev/null 2>&1; then
       (.output_style.name // "")
     ] | join("\u001f")' 2>/dev/null
   )
-  current_dir="${current_dir//$HOME/\~}"
+  current_dir="${current_dir//$HOME/~}"
 else
   _has_jq=0
   current_dir="unknown"
