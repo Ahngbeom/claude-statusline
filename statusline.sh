@@ -13,6 +13,10 @@
 #   - jq (required): JSON parsing
 #   - ccusage (recommended): Usage statistics via https://github.com/anthropics/ccusage
 #
+# Environment variables:
+#   STATUSLINE_UNICODE=1  Use ▰▱ block chars (may misalign in some terminals)
+#   NO_COLOR=1            Disable ANSI colors
+#
 # Performance notes (v1.1.0):
 #   - All color codes are pre-computed variables (no subshell forks)
 #   - jq calls are consolidated (single call per JSON source)
@@ -41,10 +45,21 @@ if [ -z "$NO_COLOR" ]; then
   _ctx=$'\033[1;37m'          # default white (context - updated dynamically)
   _sep=$'\033[38;5;240m'      # dim gray separator
   _rst=$'\033[0m'
+  _mem_ok=$'\033[38;5;120m'   # green (< 60%)
+  _mem_warn=$'\033[38;5;220m' # yellow (≥ 60%)
+  _mem_crit=$'\033[38;5;196m' # red (≥ 80%)
 else
   _dir="" _model="" _version="" _ccver="" _style="" _git=""
   _usage="" _cost="" _burn="" _cache="" _today="" _week="" _month=""
   _ctx="" _sep="" _rst=""
+  _mem_ok="" _mem_warn="" _mem_crit=""
+fi
+
+# ---- progress bar characters (ASCII-safe default) ----
+if [ -n "$STATUSLINE_UNICODE" ]; then
+  _bar_fill="▰"; _bar_empty="▱"
+else
+  _bar_fill="="; _bar_empty="-"
 fi
 
 # ---- time helpers ----
@@ -78,8 +93,8 @@ progress_bar() {
   local filled=$(( pct * width / 100 ))
   local empty=$(( width - filled ))
   local bar="" i
-  for ((i=0; i<filled; i++)); do bar+="▰"; done
-  for ((i=0; i<empty; i++)); do bar+="▱"; done
+  for ((i=0; i<filled; i++)); do bar+="$_bar_fill"; done
+  for ((i=0; i<empty; i++)); do bar+="$_bar_empty"; done
   printf '%s' "$bar"
 }
 
@@ -102,6 +117,41 @@ format_tokens() {
 }
 
 num_or_zero() { [[ "$1" =~ ^[0-9]+$ ]] && echo "$1" || echo 0; }
+
+# ---- memory usage percentage ----
+get_mem_usage() {
+  # macOS: vm_stat + sysctl (matches Activity Monitor's "Memory Used")
+  if command -v vm_stat >/dev/null 2>&1 && command -v sysctl >/dev/null 2>&1; then
+    local total_bytes page_size total_pages
+    { read -r total_bytes; read -r page_size; } < <(sysctl -n hw.memsize hw.pagesize 2>/dev/null)
+    if [[ "$total_bytes" =~ ^[0-9]+$ ]] && [[ "$page_size" =~ ^[0-9]+$ ]] && [ "$page_size" -gt 0 ]; then
+      total_pages=$((total_bytes / page_size))
+      # Single awk call: extract free + speculative + file-backed (= available)
+      local used_pct
+      used_pct=$(vm_stat 2>/dev/null | awk -v tp="$total_pages" '
+        /Pages free:/        { f=$NF+0 }
+        /Pages speculative:/ { s=$NF+0 }
+        /File-backed pages:/ { fb=$NF+0 }
+        END { if(tp>0) printf "%d", (tp-f-s-fb)*100/tp }
+      ')
+      if [[ "$used_pct" =~ ^[0-9]+$ ]]; then
+        echo "$used_pct"
+        return
+      fi
+    fi
+  fi
+  # Linux: /proc/meminfo
+  if [ -f /proc/meminfo ]; then
+    local total avail
+    total=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+    avail=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+    if [[ "$total" =~ ^[0-9]+$ ]] && [[ "$avail" =~ ^[0-9]+$ ]] && [ "$total" -gt 0 ]; then
+      echo $(( (total - avail) * 100 / total ))
+      return
+    fi
+  fi
+  echo ""
+}
 
 # ---- cache helpers for ccusage data ----
 CACHE_FILE="$HOME/.claude/stats-cache.json"
@@ -213,6 +263,9 @@ git_branch=""
 if git rev-parse --git-dir >/dev/null 2>&1; then
   git_branch=$(git branch --show-current 2>/dev/null || git rev-parse --short HEAD 2>/dev/null)
 fi
+
+# ---- memory usage ----
+mem_pct=$(get_mem_usage)
 
 # ---- context window calculation ----
 context_pct=""
@@ -375,6 +428,16 @@ if [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
 fi
 if [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
   printf '  %s%s%s' "$_style" "$output_style" "$_rst"
+fi
+if [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
+  if [ "$mem_pct" -ge 80 ]; then
+    _mem_color="$_mem_crit"
+  elif [ "$mem_pct" -ge 60 ]; then
+    _mem_color="$_mem_warn"
+  else
+    _mem_color="$_mem_ok"
+  fi
+  printf '  %s│%s %s💻 Mem %d%%%s' "$_sep" "$_rst" "$_mem_color" "$mem_pct" "$_rst"
 fi
 
 # Line 2: 🧠 Context ... │ Session ... │ 🗄 cache  speed
