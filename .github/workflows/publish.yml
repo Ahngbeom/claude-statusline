@@ -17,6 +17,7 @@ jobs:
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
+          scope: '@ahngbeom'
 
       - name: Verify version consistency
         run: |
