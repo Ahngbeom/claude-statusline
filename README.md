@@ -16,22 +16,29 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 
 | Line | Content / 내용 |
 |------|----------------|
-| 1 | 📂 Directory + Git branch │ Model, CLI version, Output style |
-| 2 | 🧠 Context usage (▰▱ bar) │ Session time + tokens │ 🗄 Cache + Speed |
+| 1 | 📂 Directory + Git branch │ Model, CLI version, Output style │ 💻 Memory |
+| 2 | 🧠 Context usage (bar) │ Session time + tokens + cost │ 🗄 Cache + Speed |
 | 3 | 💰 Today │ Week │ Month usage & costs |
 
 ### Example Output / 예시 출력
 
 ```
-📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory
-🧠 Context 45.2K/200K ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ 77% │ Session 1.2M  3h 42m ▰▰▰▰▱▱▱▱▱▱ │ 🗄 87%  12.5K/m
+📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory  │ 💻 Mem 42%
+🧠 Context 45.2K/200K [============--------] 77% │ Session 1.2M $0.12  3h 42m [====------] │ 🗄 87%  12.5K/m
+💰 Today 2.1M  $4.32 │ Week 15.8M  $31.20 │ Month 48.2M  $95.50
+```
+
+With `STATUSLINE_UNICODE=1` / Unicode 모드:
+```
+📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory  │ 💻 Mem 42%
+🧠 Context 45.2K/200K ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ 77% │ Session 1.2M $0.12  3h 42m ▰▰▰▰▱▱▱▱▱▱ │ 🗄 87%  12.5K/m
 💰 Today 2.1M  $4.32 │ Week 15.8M  $31.20 │ Month 48.2M  $95.50
 ```
 
 Graceful degradation (without ccusage / ccusage 없이):
 ```
-📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory
-🧠 Context 45.2K/200K ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ 77%
+📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory  │ 💻 Mem 42%
+🧠 Context 45.2K/200K [============--------] 77%
 ```
 
 ---
@@ -146,6 +153,14 @@ npm uninstall -g @ahngbeom/claude-statusline
 | 10-25% | 🟡 Light Yellow |
 | < 10% | 🔴 Light Pink |
 
+### Memory Usage / 메모리 사용량
+
+| Usage / 사용량 | Color / 색상 |
+|---------------|--------------|
+| < 60% | 🟢 Green |
+| 60-79% | 🟡 Yellow |
+| ≥ 80% | 🔴 Red |
+
 ---
 
 ## Customization / 커스터마이징
@@ -154,18 +169,17 @@ Edit `~/.claude/statusline.sh` to customize:
 
 `~/.claude/statusline.sh`를 편집하여 커스터마이징:
 
-### Disable Colors / 색상 비활성화
+### Environment Variables / 환경 변수
 
-Set environment variable / 환경 변수 설정:
-```bash
-export NO_COLOR=1
-```
+| Variable | Effect |
+|----------|--------|
+| `NO_COLOR=1` | Disable ANSI colors / 색상 비활성화 |
+| `STATUSLINE_UNICODE=1` | Use `▰▱` block chars instead of `=-` (may misalign in some terminals) |
 
 ### Modify Progress Bar Width / 프로그레스 바 너비 수정
 
-The progress bar uses `▰` (filled) and `▱` (empty) characters. Find calls to `progress_bar` and change the width:
+Find calls to `progress_bar` and change the width:
 
-프로그레스 바는 `▰` (채움)과 `▱` (빈칸) 문자를 사용합니다:
 ```bash
 progress_bar "$pct" 20  # Context bar (default 20)
 progress_bar "$pct" 10  # Session bar (default 10)
@@ -182,10 +196,11 @@ CACHE_TTL=120  # Default is 60 seconds
 
 ## How It Works / 작동 방식
 
-1. **Context Calculation**: Reads session JSONL files to calculate token usage
-2. **Usage Statistics**: Integrates with [ccusage](https://github.com/anthropics/ccusage) for detailed metrics
-3. **Caching**: Background caching prevents UI delays (60s TTL)
-4. **Model Detection**: Automatically detects context window size based on model
+1. **Context Calculation**: Reads `context_window` from stdin (Claude Code >= v17.2.0) as the primary source. Falls back to session JSONL files for older versions.
+2. **Session Cost**: Reads real-time `cost.total_cost_usd` from stdin, with ccusage blocks data as fallback.
+3. **Usage Statistics**: Integrates with [ccusage](https://github.com/anthropics/ccusage) for daily/weekly/monthly metrics.
+4. **Caching**: Background caching prevents UI delays (60s TTL). Cache misses show a placeholder without blocking.
+5. **Memory Indicator**: Reads system memory usage (macOS via `vm_stat`, Linux via `/proc/meminfo`).
 
 ---
 
@@ -217,7 +232,7 @@ CACHE_TTL=120  # Default is 60 seconds
    ccusage blocks --json
    ```
 
-### Context showing "TBD" / 컨텍스트가 "TBD"로 표시됨
+### Context showing "···" / 컨텍스트가 "···"로 표시됨
 
 This is normal for new sessions. Context data appears after the first API response.
 

@@ -14,8 +14,14 @@ Claude Code CLI용 3줄 컴팩트 statusline 스크립트. 세션 컨텍스트 �
 # 로컬 테스트 (mock stdin으로 statusline 실행)
 echo '{"workspace":{"current_dir":"/tmp/test"},"model":{"display_name":"Opus 4.6"},"session_id":"test-123","version":"1.0.44","output_style":{"name":"explanatory"}}' | bash statusline.sh
 
+# context_window 필드 포함 테스트 (Claude Code >= v17.2.0)
+echo '{"workspace":{"current_dir":"/tmp/test"},"model":{"display_name":"Opus 4.6"},"session_id":"test-123","version":"1.0.44","output_style":{"name":"explanatory"},"context_window":{"total_input_tokens":45000,"context_window_size":200000},"cost":{"total_cost_usd":0.123}}' | bash statusline.sh
+
 # NO_COLOR 모드 테스트
 echo '{}' | NO_COLOR=1 bash statusline.sh
+
+# Unicode progress bar 테스트
+echo '{}' | STATUSLINE_UNICODE=1 bash statusline.sh
 
 # 실제 Claude Code에 연결해서 테스트 (statusline.sh를 ~/.claude/에 복사 후 재시작)
 cp statusline.sh ~/.claude/statusline.sh
@@ -31,12 +37,13 @@ Claude Code CLI → stdin(세션 JSON) → statusline.sh → stdout(3줄 ANSI �
 
 `statusline.sh`는 Claude Code가 매 렌더링마다 호출하며, 4개 데이터 소스를 조합한다:
 
-| 소스 | 위치 | 출력 라인 |
-|------|------|-----------|
-| stdin JSON | Claude Code가 전달 | Line 1 (dir, model, version, style) |
-| 세션 JSONL | `~/.claude/projects/-{encoded-dir}/{session-id}.jsonl` 마지막 20줄 | Line 2 (컨텍스트 토큰) |
-| ccusage 캐시 | `~/.claude/stats-cache.json` (TTL 60초, 백그라운드 갱신) | Line 2 (세션), Line 3 (비용) |
-| Git | `git branch --show-current` | Line 1 (브랜치명) |
+| 소스 | 위치 | 출력 라인 | 우선순위 |
+|------|------|-----------|----------|
+| stdin JSON | Claude Code가 전달 | Line 1 (dir, model, version, style), Line 2 (session cost) | Primary |
+| stdin context_window | Claude Code >= v17.2.0 | Line 2 (컨텍스트 토큰) | Primary |
+| 세션 JSONL | `~/.claude/projects/-{encoded-dir}/{session-id}.jsonl` 마지막 20줄 | Line 2 (컨텍스트 토큰) | Fallback |
+| ccusage 캐시 | `~/.claude/stats-cache.json` (TTL 60초, 백그라운드 갱신) | Line 2 (세션), Line 3 (비용) | — |
+| Git | `git branch --show-current` | Line 1 (브랜치명) | — |
 
 ### stdin JSON 스키마
 
@@ -48,21 +55,32 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
   "model": { "display_name": "Opus 4.6" },
   "session_id": "uuid-string",
   "version": "1.0.44",
-  "output_style": { "name": "explanatory" }
+  "output_style": { "name": "explanatory" },
+  "context_window": {
+    "total_input_tokens": 45000,
+    "context_window_size": 200000
+  },
+  "cost": { "total_cost_usd": 0.123 },
+  "transcript_path": "/Users/.../.claude/projects/.../uuid.jsonl"
 }
 ```
 
+`context_window`와 `cost`는 Claude Code >= v17.2.0에서 제공. 없으면 JSONL fallback으로 컨텍스트를 계산하고, 세션 비용은 ccusage blocks 데이터를 사용한다.
+
 ### statusline.sh 내부 구조
 
-| 영역 | 줄 범위 | 역할 |
-|------|---------|------|
-| 색상 변수 | ~27-48 | `NO_COLOR` 대응, 서브셸 없이 ANSI 코드 사전 계산 |
-| 헬퍼 함수 | ~50-104 | `to_epoch()`, `progress_bar()`, `format_tokens()` 등 순수 bash 구현 |
-| 캐싱 레이어 | ~106-187 | ccusage 결과 캐시, 4개 명령 병렬 실행으로 백그라운드 갱신 |
-| 입력 파싱 | ~189-209 | 단일 jq 호출, Unit Separator(0x1f) 구분자 |
-| 컨텍스트 계산 | ~217-263 | 모델별 컨텍스트 윈도우 매핑, 사용률 기반 동적 색상 |
-| ccusage 통합 | ~265-353 | 일/주/월 통계, 세션 시간, 캐시 히트율 |
-| 렌더링 | ~365-467 | 3줄 출력 조립 |
+섹션 마커(`# ---- name ----`)로 구분. `grep -n '# ----' statusline.sh`로 경계 확인:
+
+| 영역 | 마커 | 역할 |
+|------|------|------|
+| 색상 변수 | `# ---- pre-computed color variables` | `NO_COLOR` 대응, 서브셸 없이 ANSI 코드 사전 계산 |
+| progress bar 문자 | `# ---- progress bar characters` | `STATUSLINE_UNICODE` 여부로 `▰▱` 또는 `=-` 선택 |
+| 헬퍼 함수 | `# ---- time helpers`, `# ---- pure bash progress bar`, `# ---- pure bash format_tokens` | `to_epoch()`, `progress_bar()`, `format_tokens()`, `get_mem_usage()` 등 순수 bash |
+| 캐싱 레이어 | `# ---- cache helpers for ccusage data` | ccusage 결과 캐시, 4개 명령 병렬 실행, atomic write + lock |
+| 입력 파싱 | `# ---- parse input with single jq call` | 단일 jq 호출, Unit Separator(0x1f) 구분자 |
+| 컨텍스트 계산 | `# ---- context window calculation` | stdin context_window 우선, JSONL fallback |
+| ccusage 통합 | `# ---- ccusage integration` | 일/주/월 통계, 세션 시간, 캐시 히트율 |
+| 렌더링 | `# ---- render statusline` | 3줄 출력 조립 |
 
 ### 파일 역할
 
@@ -71,6 +89,7 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - **uninstall.sh**: `~/.claude/statusline.sh`와 `~/.claude/stats-cache.json` 삭제, settings.json에서 statusline 필드 제거
 - **scripts/postinstall.sh**: npm `postinstall` 훅. `npm install`로 패키지 설치 시 install.sh와 동일한 역할 수행 (statusline.sh 복사 + settings.json 등록)
 - **scripts/preuninstall.sh**: npm `preuninstall` 훅. `npm uninstall`로 패키지 제거 시 uninstall.sh와 동일한 역할 수행
+- **.github/workflows/publish.yml**: GitHub Release 발행 시 자동 실행. `statusline.sh` 헤더 버전, `package.json` 버전, git 태그 3곳 일치를 검증 후 GitHub Packages에 npm 발행
 
 ### 성능 설계 원칙
 
@@ -78,6 +97,7 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - 색상 코드, progress bar, 토큰 포맷팅 모두 순수 bash (tr, awk 제거)
 - jq 호출 통합: 입력 파싱 6→1, 블록 파싱 8→1, 캐시 파싱 4→1
 - ccusage cache miss 시 동기 npx 호출 제거, 백그라운드 전용
+- `context_window` stdin 필드 사용 시 JSONL 파일 I/O 완전 제거 (v1.3.0)
 
 ## Dependencies
 
@@ -91,7 +111,9 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - 필드 구분자로 Unit Separator(`\u001f`) 사용 (탭/공백과 충돌 방지)
 - 동적 색상 임계값: 컨텍스트 잔여 ≤20% 빨강, ≤40% 노랑, >40% 초록
 - `NO_COLOR` 환경변수 지원 필수
+- `STATUSLINE_UNICODE=1` 환경변수로 `▰▱` 블록 문자 활성화 (기본값: ASCII `=-`)
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
+- context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
 
 ## Versioning & Release
 
