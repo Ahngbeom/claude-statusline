@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.3.1
+# Version: 1.3.2
 # License: MIT
 #
 # Features:
