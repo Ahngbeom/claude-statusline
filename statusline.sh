@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.2.0
+# Version: 1.3.0
 # License: MIT
 #
 # Features:
@@ -24,6 +24,13 @@
 #   - npx synchronous call removed; cache miss shows placeholder
 #   - Background ccusage calls run in parallel
 #   - format_tokens/progress_bar use pure bash (no awk/tr)
+#
+# Changes (v1.3.0):
+#   - context_window from stdin JSON (Claude Code >= v17.2.0) as primary context source
+#   - Eliminates JSONL tail reading when context_window is available (file I/O removed)
+#   - Session cost from stdin cost.total_cost_usd now displayed in Line 2
+#   - transcript_path from stdin used in JSONL fallback (no manual path construction)
+#   - Removed cost_per_hour dead code from blocks extraction
 
 input=$(cat)
 
@@ -239,13 +246,19 @@ update_cache_background() {
 # ---- parse input with single jq call ----
 if command -v jq >/dev/null 2>&1; then
   _has_jq=1
-  IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style < <(
+  IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style \
+    ctx_input_tokens ctx_window_size \
+    session_cost_usd transcript_path < <(
     printf '%s' "$input" | jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
       (.session_id // ""),
       (.version // ""),
-      (.output_style.name // "")
+      (.output_style.name // ""),
+      (.context_window.total_input_tokens // ""),
+      (.context_window.context_window_size // ""),
+      (.cost.total_cost_usd // ""),
+      (.transcript_path // "")
     ] | join("\u001f")' 2>/dev/null
   )
   current_dir="${current_dir//$HOME/~}"
@@ -283,12 +296,40 @@ get_max_context() {
   esac
 }
 
-if [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
+_set_context_color() {
+  local remaining_pct="$1"
+  [ -n "$NO_COLOR" ] && return
+  if [ "$remaining_pct" -le 20 ]; then
+    _ctx=$'\033[38;5;203m'    # coral red
+  elif [ "$remaining_pct" -le 40 ]; then
+    _ctx=$'\033[38;5;215m'    # peach
+  else
+    _ctx=$'\033[38;5;158m'    # mint green
+  fi
+}
+
+if [[ "$ctx_window_size" =~ ^[0-9]+$ ]] && [ "$ctx_window_size" -gt 0 ] 2>/dev/null; then
+  # Primary: use context_window from stdin (Claude Code >= v17.2.0)
+  ctx_tokens="${ctx_input_tokens:-0}"
+  if [[ "$ctx_tokens" =~ ^[0-9]+$ ]]; then
+    context_used_tokens="$ctx_tokens"
+    context_max_tokens="$ctx_window_size"
+    context_used_pct=$(( ctx_tokens * 100 / ctx_window_size ))
+    context_remaining_pct=$(( 100 - context_used_pct ))
+    _set_context_color "$context_remaining_pct"
+    context_pct="${context_remaining_pct}%"
+  fi
+elif [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
+  # Fallback: read session JSONL (older Claude Code without context_window)
   MAX_CONTEXT=$(get_max_context "$model_name")
 
-  # Convert current dir to session file path
-  project_dir=$(echo "$current_dir" | sed "s|~|$HOME|g" | sed 's|/|-|g' | sed 's|^-||')
-  session_file="$HOME/.claude/projects/-${project_dir}/${session_id}.jsonl"
+  # Prefer transcript_path from stdin; fall back to manual path construction
+  if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
+    session_file="$transcript_path"
+  else
+    project_dir=$(echo "$current_dir" | sed "s|~|$HOME|g" | sed 's|/|-|g' | sed 's|^-||')
+    session_file="$HOME/.claude/projects/-${project_dir}/${session_id}.jsonl"
+  fi
 
   if [ -f "$session_file" ]; then
     latest_tokens=$(tail -20 "$session_file" | jq -r 'select(.message.usage) | .message.usage | ((.input_tokens // 0) + (.cache_read_input_tokens // 0))' 2>/dev/null | tail -1)
@@ -298,18 +339,7 @@ if [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
       context_max_tokens="$MAX_CONTEXT"
       context_used_pct=$(( latest_tokens * 100 / MAX_CONTEXT ))
       context_remaining_pct=$(( 100 - context_used_pct ))
-
-      # Set context color based on remaining percentage
-      if [ -z "$NO_COLOR" ]; then
-        if [ "$context_remaining_pct" -le 20 ]; then
-          _ctx=$'\033[38;5;203m'    # coral red
-        elif [ "$context_remaining_pct" -le 40 ]; then
-          _ctx=$'\033[38;5;215m'    # peach
-        else
-          _ctx=$'\033[38;5;158m'    # mint green
-        fi
-      fi
-
+      _set_context_color "$context_remaining_pct"
       context_pct="${context_remaining_pct}%"
     fi
   fi
@@ -317,7 +347,7 @@ fi
 
 # ---- ccusage integration ----
 session_txt=""; session_pct=0; session_bar=""
-cost_usd=""; cost_per_hour=""; tpm=""; tot_tokens=""
+cost_usd=""; tpm=""; tot_tokens=""
 today_tokens=""; today_cost=""
 week_tokens=""; week_cost=""
 month_tokens=""; month_cost=""
@@ -348,12 +378,11 @@ if [ "$_has_jq" -eq 1 ]; then
 
   if [ -n "$blocks_output" ] && [ "$blocks_output" != "null" ]; then
     # Extract active block and all fields with single jq call
-    IFS=$'\t' read -r cost_usd cost_per_hour tot_tokens tpm cache_read cache_creation reset_time_str start_time_str < <(
+    IFS=$'\t' read -r cost_usd tot_tokens tpm cache_read cache_creation reset_time_str start_time_str < <(
       printf '%s' "$blocks_output" | jq -r '
         (.blocks[] | select(.isActive == true)) |
         [
           (.costUSD // ""),
-          (.burnRate.costPerHour // ""),
           (.totalTokens // ""),
           (.burnRate.tokensPerMinute // ""),
           (.tokenCounts.cacheReadInputTokens // 0),
@@ -455,11 +484,18 @@ fi
 sess_part=""
 if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
   tot_formatted=$(format_tokens "$tot_tokens")
+  # Session cost: prefer stdin cost.total_cost_usd (real-time), fallback to ccusage blocks cost_usd
+  _sess_cost=""
+  if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    _sess_cost=" $(printf '$%.2f' "$session_cost_usd")"
+  elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    _sess_cost=" $(printf '$%.2f' "$cost_usd")"
+  fi
   if [ -n "$rh" ] || [ -n "$rm_val" ]; then
     session_bar=$(progress_bar "$session_pct" 10)
-    sess_part="${_session}Session ${tot_formatted}  ${rh}h ${rm_val}m ${session_bar}${_rst}"
+    sess_part="${_session}Session ${tot_formatted}${_sess_cost}  ${rh}h ${rm_val}m ${session_bar}${_rst}"
   else
-    sess_part="${_session}Session ${tot_formatted}${_rst}"
+    sess_part="${_session}Session ${tot_formatted}${_sess_cost}${_rst}"
   fi
 fi
 
