@@ -25,9 +25,6 @@
     "postinstall": "bash scripts/postinstall.sh",
     "preuninstall": "bash scripts/preuninstall.sh"
   },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "os": [
     "darwin",
     "linux"

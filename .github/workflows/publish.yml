@@ -1,4 +1,4 @@
-name: Publish to GitHub Packages
+name: Publish Package
 
 on:
   release:
@@ -16,8 +16,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22.x'
-          registry-url: 'https://npm.pkg.github.com'
-          scope: '@ahngbeom'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Verify version consistency
         run: |
@@ -29,6 +28,18 @@ jobs:
             exit 1
           fi
 
-      - run: npm publish
+      - name: Publish to npmjs.com
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.x'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@ahngbeom'
+
+      - name: Publish to GitHub Packages
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
