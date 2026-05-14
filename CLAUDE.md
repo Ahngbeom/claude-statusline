@@ -115,6 +115,13 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
 
+### Usage counter semantics
+
+- Line 3의 `Today` / `Week` / `Month`는 ccusage가 제공하는 **달력 기준** 누적치 (ISO 주, 달력 월). Anthropic의 weekly rate limit은 **rolling 7-day**라 정책 한도 게이지로 직접 환산되지 않음 — 라벨 의미를 바꿀 때는 README의 "Usage Counters" 섹션도 함께 갱신할 것
+- Line 2의 `Session`은 ccusage active block 기준 **5시간 rolling window** (2026-05-06 정책 변경 후에도 윈도우 길이는 동일, capacity만 2배)
+- JSONL fallback에서 컨텍스트 사용량을 계산할 때는 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 세 값을 모두 더해야 함 (cache_creation도 컨텍스트 윈도우를 점유)
+- `get_max_context()`의 모델 패턴 매칭은 **구체적인 패턴이 먼저** 와야 함 (`case`는 첫 매치에서 종료). 1M 컨텍스트 변형 패턴을 일반 Opus/Sonnet 분기보다 위에 유지
+
 ## Versioning & Release
 
 - 버전은 `statusline.sh` 헤더의 `# Version: X.Y.Z` 에서 단일 관리

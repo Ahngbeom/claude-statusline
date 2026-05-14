@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.3.2
+# Version: 1.3.3
 # License: MIT
 #
 # Features:
@@ -31,6 +31,12 @@
 #   - Session cost from stdin cost.total_cost_usd now displayed in Line 2
 #   - transcript_path from stdin used in JSONL fallback (no manual path construction)
 #   - Removed cost_per_hour dead code from blocks extraction
+#
+# Changes (v1.3.3):
+#   - JSONL fallback now adds cache_creation_input_tokens to the context-used sum
+#     (previously underestimated context after a fresh cache write)
+#   - get_max_context() recognizes 1M-context model variants (e.g. "Opus 4.7 [1m]",
+#     "Sonnet ... 1M context") and reports 1000000 instead of 200000
 
 input=$(cat)
 
@@ -288,6 +294,7 @@ context_remaining_pct=""
 
 get_max_context() {
   case "$1" in
+    *"1M"*|*"1m"*|*"[1m]"*|*"1M context"*|*"1m context"*) echo "1000000" ;;
     *"Opus 4"*|*"opus 4"*|*"Opus"*|*"opus"*)       echo "200000" ;;
     *"Sonnet 4"*|*"sonnet 4"*|*"Sonnet 3.5"*|*"sonnet 3.5"*|*"Sonnet"*|*"sonnet"*) echo "200000" ;;
     *"Haiku 3.5"*|*"haiku 3.5"*|*"Haiku 4"*|*"haiku 4"*|*"Haiku"*|*"haiku"*)       echo "200000" ;;
@@ -332,7 +339,7 @@ elif [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
   fi
 
   if [ -f "$session_file" ]; then
-    latest_tokens=$(tail -20 "$session_file" | jq -r 'select(.message.usage) | .message.usage | ((.input_tokens // 0) + (.cache_read_input_tokens // 0))' 2>/dev/null | tail -1)
+    latest_tokens=$(tail -20 "$session_file" | jq -r 'select(.message.usage) | .message.usage | ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' 2>/dev/null | tail -1)
 
     if [ -n "$latest_tokens" ] && [ "$latest_tokens" -gt 0 ] 2>/dev/null; then
       context_used_tokens="$latest_tokens"

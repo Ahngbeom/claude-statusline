@@ -163,6 +163,22 @@ npm uninstall -g @ahngbeom/claude-statusline
 
 ---
 
+## Usage Counters / 사용량 카운터
+
+Line 3의 `Today` / `Week` / `Month` 값은 **[ccusage](https://github.com/ryoppippi/ccusage)** 가 보고하는 **달력 기준** 누적치입니다:
+
+- `Today`: 오늘 자정(로컬 TZ)부터의 사용량
+- `Week`: 이번 ISO 달력 주(월요일 시작) 누적
+- `Month`: 이번 달력 월 누적
+
+> ⚠️ **Anthropic의 weekly rate limit은 rolling 7-day window** 기반입니다 (2026-05-06 정책 변경 이후에도 유지). 즉 Line 3의 `Week` 표시는 **정책 한도 게이지가 아니라 달력 주간 회고용**입니다. 한도 잔량은 Claude Code 내장 `/status` 명령으로 확인하세요.
+>
+> Anthropic's weekly rate limit uses a **rolling 7-day window**. The `Week` counter on Line 3 reflects **calendar-week** spend (via ccusage), not progress toward the weekly limit. Use `/status` inside Claude Code for the official limit gauge.
+
+Line 2의 `Session` 시간/토큰은 ccusage가 추적하는 **5시간 rolling window** (active block) 기준입니다. 2026-05-06 정책 변경으로 5시간 한도가 2배로 증가했지만 윈도우 길이(5h) 자체는 동일합니다.
+
+---
+
 ## Customization / 커스터마이징
 
 Edit `~/.claude/statusline.sh` to customize:
