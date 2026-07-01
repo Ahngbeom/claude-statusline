@@ -142,5 +142,8 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - 릴리즈 노트 구성: 프로젝트 소개 1줄, Features, Installation one-liner, Changes since 이전 버전, Requirements
 - install.sh URL은 `main` 브랜치 고정 (태그별 URL 아님)
 - `package.json` 버전은 `statusline.sh` 헤더와 반드시 동기화
-- GitHub Release 생성 시 `.github/workflows/publish.yml`이 GitHub Packages에 자동 발행
-- 릴리즈 전 3곳 버전 일치 확인 필수: `statusline.sh` 헤더, `package.json`, git 태그 (CI가 자동 검증하므로 불일치 시 publish 실패)
+- GitHub Release 생성 시 `.github/workflows/publish.yml`이 npmjs.com과 GitHub Packages에 독립된 잡으로 발행 (한쪽 실패가 다른 쪽을 막지 않음)
+- 릴리즈 전 3곳 버전 일치 확인 필수: `statusline.sh` 헤더, `package.json`, git 태그 (`verify` 잡이 자동 검증하므로 불일치 시 두 발행 잡 모두 실행되지 않음)
+- 릴리즈 후 `gh run list --workflow=publish.yml --limit 1`로 `publish-npmjs`/`publish-github-packages` 둘 다 성공했는지 확인할 것 (NPM_TOKEN 만료로 실패했던 v1.3.0/v1.3.1/v1.3.3/v1.3.4 전례 있음). 실패 시 토큰 재발급 후 `gh run rerun <run-id> --failed`로 재시도
+- push/PR마다 `.github/workflows/ci.yml`(shellcheck + bats)이 별도로 실행되며, 릴리즈 여부와 무관하게 항상 통과해야 함
+- 별도 `CHANGELOG.md`는 두지 않기로 결정함 (2026-07-01). 버전별 변경사항은 `statusline.sh` 헤더 주석 + GitHub Release 노트 2곳으로 충분하며, 세 번째 파일을 추가하면 동기화 부담만 늘어남 (YAGNI)

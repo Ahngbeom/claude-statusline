@@ -1,6 +1,8 @@
 # claude-statusline
 
 [![GitHub Release](https://img.shields.io/github/v/release/ahngbeom/claude-statusline)](https://github.com/Ahngbeom/claude-statusline/releases)
+[![npm version](https://img.shields.io/npm/v/@ahngbeom/claude-statusline)](https://www.npmjs.com/package/@ahngbeom/claude-statusline)
+[![CI](https://github.com/ahngbeom/claude-statusline/actions/workflows/ci.yml/badge.svg)](https://github.com/ahngbeom/claude-statusline/actions/workflows/ci.yml)
 
 A detailed, informative statusline for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
 
