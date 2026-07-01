@@ -16,17 +16,21 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 
 | Line | Content / 내용 |
 |------|----------------|
-| 1 | 📂 Directory + Git branch │ Model, CLI version, Output style │ 💻 Memory |
+| 1 | 📂 Directory + Git branch (dirty `*`, ahead/behind `↑↓`) │ Model, CLI version, Output style │ 💻 Memory |
 | 2 | 🧠 Context usage (bar) │ Session time + tokens + cost │ 🗄 Cache + Speed |
 | 3 | 💰 Today │ Week │ Month usage & costs |
 
 ### Example Output / 예시 출력
 
 ```
-📂 ~/projects/myapp  main │ Opus 4.6  v1.0.44  explanatory  │ 💻 Mem 42%
+📂 ~/projects/myapp  main* ↑2 │ Opus 4.6  v1.0.44  explanatory  │ 💻 Mem 42%
 🧠 Context 45.2K/200K [============--------] 77% │ Session 1.2M $0.12  3h 42m [====------] │ 🗄 87%  12.5K/m
 💰 Today 2.1M  $4.32 │ Week 15.8M  $31.20 │ Month 48.2M  $95.50
 ```
+
+`main*` means uncommitted changes are present; `↑2`/`↓1` show commits ahead/behind the upstream branch (both omitted when there's nothing to report).
+
+`main*`는 커밋되지 않은 변경사항이 있음을, `↑2`/`↓1`은 upstream 브랜치 대비 앞서거나 뒤처진 커밋 수를 의미합니다 (보고할 내용이 없으면 생략).
 
 With `STATUSLINE_UNICODE=1` / Unicode 모드:
 ```
@@ -205,6 +209,7 @@ Edit `~/.claude/statusline.sh` to customize:
 | `NO_COLOR=1` | Disable ANSI colors / 색상 비활성화 |
 | `STATUSLINE_UNICODE=1` | Use `▰▱` block chars instead of `=-` (may misalign in some terminals) |
 | `STATUSLINE_MAX_CONTEXT=<tokens>` | Override the context window size used by the JSONL fallback (older Claude Code without the `context_window` stdin field), e.g. for a new model not yet recognized by `get_max_context()` / `context_window` stdin 필드가 없는 구버전에서 fallback 컨텍스트 크기를 오버라이드 (신규 모델 즉시 대응용) |
+| `STATUSLINE_HIDE_COST=1` | Hide session cost (Line 2) and all of Line 3 (Today/Week/Month) — for orgs that don't want cost exposed in the terminal / Line 2의 세션 비용과 Line 3 전체(Today/Week/Month)를 숨김 (비용 노출을 꺼리는 조직용) |
 
 ### Modify Progress Bar Width / 프로그레스 바 너비 수정
 

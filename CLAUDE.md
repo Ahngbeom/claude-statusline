@@ -121,7 +121,10 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - 동적 색상 임계값: 컨텍스트 잔여 ≤20% 빨강, ≤40% 노랑, >40% 초록
 - `NO_COLOR` 환경변수 지원 필수
 - `STATUSLINE_UNICODE=1` 환경변수로 `▰▱` 블록 문자 활성화 (기본값: ASCII `=-`)
+- `STATUSLINE_MAX_CONTEXT=<tokens>` 환경변수로 JSONL fallback 컨텍스트 윈도우 크기 오버라이드 (신규 모델 즉시 대응)
+- `STATUSLINE_HIDE_COST=1` 환경변수로 세션 비용(Line 2)과 Line 3 전체 숨김
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
+- Git 브랜치명은 dirty(`*`)/ahead-behind(`↑N↓N`) 표시를 포함하며, upstream 미설정 시 ahead/behind는 조용히 생략됨 (graceful degradation과 동일한 원칙)
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
 
 ### Usage counter semantics

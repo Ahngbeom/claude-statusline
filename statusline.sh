@@ -1,11 +1,11 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.3.5
+# Version: 1.4.0
 # License: MIT
 #
 # Features:
-#   Line 1: Directory + Git branch │ Model, CLI version, Output style
+#   Line 1: Directory + Git branch (dirty */ahead-behind ↑↓) │ Model, CLI version, Output style
 #   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed
 #   Line 3: Daily │ Weekly │ Monthly usage and costs
 #
@@ -17,6 +17,7 @@
 #   STATUSLINE_UNICODE=1        Use ▰▱ block chars (may misalign in some terminals)
 #   NO_COLOR=1                  Disable ANSI colors
 #   STATUSLINE_MAX_CONTEXT=<n>  Override JSONL-fallback context window size
+#   STATUSLINE_HIDE_COST=1      Hide session cost (Line 2) and all of Line 3
 #
 # Performance notes (v1.1.0):
 #   - All color codes are pre-computed variables (no subshell forks)
@@ -54,6 +55,13 @@
 #   - STATUSLINE_MAX_CONTEXT=<tokens> env var overrides the JSONL-fallback
 #     context window size, for models get_max_context() doesn't recognize yet
 #   - Removed a redundant duplicate progress_bar() call for the session bar
+#
+# Changes (v1.4.0):
+#   - Line 1 git branch now shows a dirty indicator ("*" when git status
+#     --porcelain is non-empty) and ahead/behind counts vs. upstream
+#     ("↑N"/"↓N", omitted when there's nothing to report or no upstream)
+#   - STATUSLINE_HIDE_COST=1 hides session cost (Line 2) and all of Line 3
+#     (Today/Week/Month), for orgs that don't want cost shown in the terminal
 
 input=$(cat)
 
@@ -297,6 +305,17 @@ fi
 git_branch=""
 if git rev-parse --git-dir >/dev/null 2>&1; then
   git_branch=$(git branch --show-current 2>/dev/null || git rev-parse --short HEAD 2>/dev/null)
+
+  if [ -n "$git_branch" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    git_branch="${git_branch}*"
+  fi
+
+  git_behind=""; git_ahead=""
+  read -r git_behind git_ahead < <(git rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null)
+  git_ahead_behind=""
+  [[ "$git_ahead" =~ ^[0-9]+$ ]] && [ "$git_ahead" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↑${git_ahead}"
+  [[ "$git_behind" =~ ^[0-9]+$ ]] && [ "$git_behind" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↓${git_behind}"
+  [ -n "$git_ahead_behind" ] && git_branch="${git_branch} ${git_ahead_behind}"
 fi
 
 # ---- memory usage ----
@@ -513,10 +532,12 @@ if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
   tot_formatted=$(format_tokens "$tot_tokens")
   # Session cost: prefer stdin cost.total_cost_usd (real-time), fallback to ccusage blocks cost_usd
   _sess_cost=""
-  if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    _sess_cost=" $(printf '$%.2f' "$session_cost_usd")"
-  elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    _sess_cost=" $(printf '$%.2f' "$cost_usd")"
+  if [ -z "$STATUSLINE_HIDE_COST" ]; then
+    if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      _sess_cost=" $(printf '$%.2f' "$session_cost_usd")"
+    elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      _sess_cost=" $(printf '$%.2f' "$cost_usd")"
+    fi
   fi
   if [ -n "$rh" ] || [ -n "$rm_val" ]; then
     sess_part="${_session}Session ${tot_formatted}${_sess_cost}  ${rh}h ${rm_val}m ${session_bar}${_rst}"
@@ -550,36 +571,38 @@ fi
 
 # Line 3: 💰 Today ... │ Week ... │ Month ...
 line3=""
-if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
-  today_tokens_formatted=$(format_tokens "$today_tokens")
-  if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
-    today_cost_formatted=$(printf '%.2f' "$today_cost")
-    line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
-  else
-    line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
+if [ -z "$STATUSLINE_HIDE_COST" ]; then
+  if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
+    today_tokens_formatted=$(format_tokens "$today_tokens")
+    if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
+      today_cost_formatted=$(printf '%.2f' "$today_cost")
+      line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
+    else
+      line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
+    fi
   fi
-fi
 
-if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
-  week_tokens_formatted=$(format_tokens "$week_tokens")
-  if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
-    week_cost_formatted=$(printf '%.2f' "$week_cost")
-    week_part="${_week}Week ${week_tokens_formatted}  \$${week_cost_formatted}${_rst}"
-  else
-    week_part="${_week}Week ${week_tokens_formatted}${_rst}"
+  if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
+    week_tokens_formatted=$(format_tokens "$week_tokens")
+    if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
+      week_cost_formatted=$(printf '%.2f' "$week_cost")
+      week_part="${_week}Week ${week_tokens_formatted}  \$${week_cost_formatted}${_rst}"
+    else
+      week_part="${_week}Week ${week_tokens_formatted}${_rst}"
+    fi
+    if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${week_part}"; else line3="${week_part}"; fi
   fi
-  if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${week_part}"; else line3="${week_part}"; fi
-fi
 
-if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
-  month_tokens_formatted=$(format_tokens "$month_tokens")
-  if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
-    month_cost_formatted=$(printf '%.2f' "$month_cost")
-    month_part="${_month}Month ${month_tokens_formatted}  \$${month_cost_formatted}${_rst}"
-  else
-    month_part="${_month}Month ${month_tokens_formatted}${_rst}"
+  if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
+    month_tokens_formatted=$(format_tokens "$month_tokens")
+    if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
+      month_cost_formatted=$(printf '%.2f' "$month_cost")
+      month_part="${_month}Month ${month_tokens_formatted}  \$${month_cost_formatted}${_rst}"
+    else
+      month_part="${_month}Month ${month_tokens_formatted}${_rst}"
+    fi
+    if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${month_part}"; else line3="${month_part}"; fi
   fi
-  if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${month_part}"; else line3="${month_part}"; fi
 fi
 
 # Print lines

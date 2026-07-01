@@ -57,3 +57,23 @@ load 'test_helper'
   line2="$(sed -n '2p' <<<"$output")"
   [ "$line2" = "🧠 Context 105.0K/1.00M ==================-- 90%" ]
 }
+
+@test "golden: with an active ccusage session, cost/Line 3 render by default" {
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1","context_window":{"total_input_tokens":45000,"context_window_size":200000},"cost":{"total_cost_usd":0.42}}'
+  run run_statusline_with_cache "$json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"\$0.42"* ]]
+  line3="$(sed -n '3p' <<<"$output")"
+  [ -n "$line3" ]
+}
+
+@test "golden: STATUSLINE_HIDE_COST=1 hides session cost and all of Line 3" {
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1","context_window":{"total_input_tokens":45000,"context_window_size":200000},"cost":{"total_cost_usd":0.42}}'
+  run run_statusline_with_cache "$json" STATUSLINE_HIDE_COST=1
+  [ "$status" -eq 0 ]
+
+  # No "$" cost anywhere in the output, and no Line 3 at all
+  [[ "$output" != *'$'* ]]
+  line3="$(sed -n '3p' <<<"$output")"
+  [ -z "$line3" ]
+}
