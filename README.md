@@ -287,3 +287,13 @@ MIT License - see [LICENSE](LICENSE)
 Issues and pull requests are welcome!
 
 이슈와 풀 리퀘스트를 환영합니다!
+
+### Running tests / 테스트 실행
+
+```bash
+# Requires bats-core: brew install bats-core (or npm install -g bats)
+bats tests/
+
+# Requires shellcheck: brew install shellcheck
+shellcheck statusline.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
+```

@@ -4,14 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Claude Code CLI용 3줄 컴팩트 statusline 스크립트. 세션 컨텍스트 사용량, 토큰/비용 통계, Git 정보를 터미널에 실시간 표시한다. 순수 Bash 스크립트로 빌드/테스트/린트 도구 없음.
+Claude Code CLI용 3줄 컴팩트 statusline 스크립트. 세션 컨텍스트 사용량, 토큰/비용 통계, Git 정보를 터미널에 실시간 표시한다. 순수 Bash 스크립트이며, 회귀 방지를 위해 `bats-core`(경량 테스트)와 `shellcheck`(린트)를 CI에서만 사용한다 (별도 빌드 도구는 없음).
 
 ## Development
 
-빌드/테스트/린트 도구 없음. 수동 테스트로 검증한다.
-
 ```bash
-# 로컬 테스트 (mock stdin으로 statusline 실행)
+# 테스트 실행 (bats-core 필요: brew install bats-core 또는 npm install -g bats)
+bats tests/
+
+# 린트 실행 (shellcheck 필요: brew install shellcheck)
+shellcheck statusline.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
+
+# 로컬 수동 테스트 (mock stdin으로 statusline 실행)
 echo '{"workspace":{"current_dir":"/tmp/test"},"model":{"display_name":"Opus 4.6"},"session_id":"test-123","version":"1.0.44","output_style":{"name":"explanatory"}}' | bash statusline.sh
 
 # context_window 필드 포함 테스트 (Claude Code >= v17.2.0)
@@ -89,7 +93,8 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - **uninstall.sh**: `~/.claude/statusline.sh`와 `~/.claude/stats-cache.json` 삭제, settings.json에서 statusline 필드 제거
 - **scripts/postinstall.sh**: npm `postinstall` 훅. `npm install`로 패키지 설치 시 install.sh와 동일한 역할 수행 (statusline.sh 복사 + settings.json 등록)
 - **scripts/preuninstall.sh**: npm `preuninstall` 훅. `npm uninstall`로 패키지 제거 시 uninstall.sh와 동일한 역할 수행
-- **.github/workflows/publish.yml**: GitHub Release 발행 시 자동 실행. `statusline.sh` 헤더 버전, `package.json` 버전, git 태그 3곳 일치를 검증 후 GitHub Packages에 npm 발행
+- **.github/workflows/publish.yml**: GitHub Release 발행 시 자동 실행. `verify`(버전 3곳 일치) 잡 이후 `publish-npmjs`/`publish-github-packages` 두 잡이 독립적으로 실행 — 한쪽 레지스트리 발행 실패가 다른 쪽을 막지 않는다 (v1.3.4에서 단일 잡 구조를 분리)
+- **.github/workflows/ci.yml**: push/PR마다 실행. `shellcheck` 린트 + `tests/`의 `bats` 테스트
 
 ### 성능 설계 원칙
 
@@ -98,6 +103,7 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - jq 호출 통합: 입력 파싱 6→1, 블록 파싱 8→1, 캐시 파싱 4→1
 - ccusage cache miss 시 동기 npx 호출 제거, 백그라운드 전용
 - `context_window` stdin 필드 사용 시 JSONL 파일 I/O 완전 제거 (v1.3.0)
+- 사용되지 않던 `session_txt`/`fmt_time_hm()` 제거로 세션 렌더링 시 불필요한 `date` 서브프로세스 포크 제거 (v1.3.4)
 
 ## Dependencies
 
@@ -120,7 +126,7 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - Line 3의 `Today` / `Week` / `Month`는 ccusage가 제공하는 **달력 기준** 누적치 (ISO 주, 달력 월). Anthropic의 weekly rate limit은 **rolling 7-day**라 정책 한도 게이지로 직접 환산되지 않음 — 라벨 의미를 바꿀 때는 README의 "Usage Counters" 섹션도 함께 갱신할 것
 - Line 2의 `Session`은 ccusage active block 기준 **5시간 rolling window** (2026-05-06 정책 변경 후에도 윈도우 길이는 동일, capacity만 2배)
 - JSONL fallback에서 컨텍스트 사용량을 계산할 때는 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 세 값을 모두 더해야 함 (cache_creation도 컨텍스트 윈도우를 점유)
-- `get_max_context()`의 모델 패턴 매칭은 **구체적인 패턴이 먼저** 와야 함 (`case`는 첫 매치에서 종료). 1M 컨텍스트 변형 패턴을 일반 Opus/Sonnet 분기보다 위에 유지
+- `get_max_context()`의 모델 패턴 매칭은 **구체적인 패턴이 먼저** 와야 함 (`case`는 첫 매치에서 종료). 1M 컨텍스트 변형 패턴을 일반 Opus/Sonnet 분기보다 위에 유지. 동일한 이유로 `"Claude 3 Haiku"`도 일반 `"Haiku"` 분기보다 위에 있어야 함 (v1.3.4에서 발견된 회귀: 일반 패턴이 먼저 있어 3 Haiku 전용 100000 분기가 죽어있었음) — 새 모델 패턴을 추가할 때는 항상 `tests/unit_get_max_context.bats`로 순서를 검증할 것
 
 ## Versioning & Release
 

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run shellcheck
+        run: shellcheck statusline.sh install.sh uninstall.sh scripts/postinstall.sh scripts/preuninstall.sh tests/test_helper.bash
+
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.x'
+
+      - name: Install bats-core and jq
+        run: |
+          npm install -g bats
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Run bats tests
+        run: bats tests/

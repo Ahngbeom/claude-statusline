@@ -100,11 +100,6 @@ else
   _file_mtime() { stat -c %Y "$1" 2>/dev/null; }
 fi
 
-fmt_time_hm() {
-  local epoch="$1"
-  if date -r 0 +%s >/dev/null 2>&1; then date -r "$epoch" +"%H:%M"; else date -d "@$epoch" +"%H:%M"; fi
-}
-
 # ---- pure bash progress bar (no tr subprocess) ----
 progress_bar() {
   local pct="${1:-0}" width="${2:-10}"
@@ -225,9 +220,13 @@ update_cache_background() {
     local _to=""
     command -v timeout >/dev/null 2>&1 && _to="timeout 30"
 
+    # shellcheck disable=SC2086 # $_to/$_ccusage_cmd hold multi-word commands; intentionally unquoted
     $_to $_ccusage_cmd blocks --json  >"$tmpdir/blocks"  2>/dev/null &
+    # shellcheck disable=SC2086
     $_to $_ccusage_cmd daily  --json --since "$today_date" >"$tmpdir/daily"  2>/dev/null &
+    # shellcheck disable=SC2086
     $_to $_ccusage_cmd weekly --json >"$tmpdir/weekly"  2>/dev/null &
+    # shellcheck disable=SC2086
     $_to $_ccusage_cmd monthly --json >"$tmpdir/monthly" 2>/dev/null &
     wait
 
@@ -303,8 +302,8 @@ get_max_context() {
     *"[1m]"*|*"[1M]"*|*"1M context"*|*"1m context"*) echo "1000000" ;;
     *"Opus 4"*|*"opus 4"*|*"Opus"*|*"opus"*)       echo "200000" ;;
     *"Sonnet 4"*|*"sonnet 4"*|*"Sonnet 3.5"*|*"sonnet 3.5"*|*"Sonnet"*|*"sonnet"*) echo "200000" ;;
-    *"Haiku 3.5"*|*"haiku 3.5"*|*"Haiku 4"*|*"haiku 4"*|*"Haiku"*|*"haiku"*)       echo "200000" ;;
     *"Claude 3 Haiku"*|*"claude 3 haiku"*) echo "100000" ;;
+    *"Haiku 3.5"*|*"haiku 3.5"*|*"Haiku 4"*|*"haiku 4"*|*"Haiku"*|*"haiku"*)       echo "200000" ;;
     *) echo "200000" ;;
   esac
 }
@@ -361,7 +360,7 @@ elif [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
 fi
 
 # ---- ccusage integration ----
-session_txt=""; session_pct=0; session_bar=""
+session_pct=0; session_bar=""
 cost_usd=""; tpm=""; tot_tokens=""
 today_tokens=""; today_cost=""
 week_tokens=""; week_cost=""
@@ -423,8 +422,6 @@ if [ "$_has_jq" -eq 1 ]; then
       session_pct=$(( elapsed * 100 / total ))
       remaining=$(( end_sec - now_sec )); (( remaining<0 )) && remaining=0
       rh=$(( remaining / 3600 )); rm_val=$(( (remaining % 3600) / 60 ))
-      end_hm=$(fmt_time_hm "$end_sec")
-      session_txt="$(printf '%dh %dm until reset at %s (%d%%)' "$rh" "$rm_val" "$end_hm" "$session_pct")"
       session_bar=$(progress_bar "$session_pct" 10)
     fi
   fi
