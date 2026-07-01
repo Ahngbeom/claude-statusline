@@ -98,3 +98,34 @@ setup_repo_with_upstream() {
 
   rm -rf "$base"
 }
+
+# Regression test for the intermittent "statusline hangs for a long time"
+# report: a stuck git subprocess (e.g. contended index.lock, slow/network
+# filesystem) must not block the whole render indefinitely. Simulates this
+# with a fake `git` that always sleeps, placed first on PATH.
+@test "regression: a hanging git command times out instead of blocking the render" {
+  base="$(mktemp -d)"
+  mkdir -p "$base/fakebin" "$base/work"
+  cat >"$base/fakebin/git" <<'EOF'
+#!/bin/bash
+sleep 10
+EOF
+  chmod +x "$base/fakebin/git"
+
+  start=$(date +%s)
+  run run_statusline_in "$base/work" "$JSON" "PATH=$base/fakebin:$PATH"
+  end=$(date +%s)
+  elapsed=$(( end - start ))
+
+  [ "$status" -eq 0 ]
+  # Bounded well under the fake git's 10s sleep - proves the timeout fired
+  # instead of the script waiting on the hung subprocess.
+  [ "$elapsed" -lt 6 ]
+
+  line1="$(sed -n '1p' <<<"$output")"
+  # No branch segment was resolved in time -> graceful degradation, same as
+  # the "no git repo" case (dir goes straight into the "│" separator).
+  [[ "$line1" == *"/tmp/proj  │ Opus 4.6"* ]]
+
+  rm -rf "$base"
+}

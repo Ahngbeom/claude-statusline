@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.4.0
+# Version: 1.4.1
 # License: MIT
 #
 # Features:
@@ -62,8 +62,18 @@
 #     ("↑N"/"↓N", omitted when there's nothing to report or no upstream)
 #   - STATUSLINE_HIDE_COST=1 hides session cost (Line 2) and all of Line 3
 #     (Today/Week/Month), for orgs that don't want cost shown in the terminal
+#
+# Changes (v1.4.1):
+#   - git branch/dirty/ahead-behind lookups and the JSONL context fallback are
+#     now bounded by a 2s timeout (with_timeout helper), fixing intermittent
+#     long statusline hangs caused by a stuck .git/index.lock or slow disk
+#   - Reduced per-render subprocess forks: $OSTYPE-based platform detection,
+#     printf|jq -> herestring, $(printf ...) -> printf -v, $(date +%s) ->
+#     $EPOCHSECONDS (bash 5+), $(cat) -> read builtin, sed chain -> pure bash
 
-input=$(cat)
+# Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
+# (no NUL byte appears in JSON input) and populates $input directly.
+IFS= read -r -d '' input
 
 # ---- pre-computed color variables (no subshell forks) ----
 if [ -z "$NO_COLOR" ]; then
@@ -101,23 +111,77 @@ else
 fi
 
 # ---- time helpers ----
-# Platform detection for to_epoch (one-time per invocation, eliminates redundant detection on each call)
-if date -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
-  to_epoch() { date -d "$1" +%s; }
-elif command -v gdate >/dev/null 2>&1 && gdate -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
-  to_epoch() { gdate -d "$1" +%s; }
-elif date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "2024-01-01T00:00:00+0000" +%s >/dev/null 2>&1; then
-  to_epoch() { date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "${1/Z/+0000}" +%s; }
-else
-  to_epoch() { python3 -c "import sys,datetime; s=sys.argv[1].replace('Z','+00:00'); print(int(datetime.datetime.fromisoformat(s).timestamp()))" "$1"; }
+# $OSTYPE is a bash builtin (zero fork) and never changes for the life of
+# the machine, so for the two officially supported platforms we pick the
+# date/stat flavor directly instead of forking date/stat on every single
+# render just to probe which syntax they understand. Uncommon platforms
+# (freebsd, msys, cygwin, ...) still get the old probe-based detection,
+# since we can't assume GNU/BSD semantics there.
+case "$OSTYPE" in
+  darwin*)
+    if command -v gdate >/dev/null 2>&1; then
+      to_epoch() { gdate -d "$1" +%s; }
+    else
+      to_epoch() { date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "${1/Z/+0000}" +%s; }
+    fi
+    _file_mtime() { stat -f %m "$1" 2>/dev/null; }
+    ;;
+  linux*)
+    to_epoch() { date -d "$1" +%s; }
+    _file_mtime() { stat -c %Y "$1" 2>/dev/null; }
+    ;;
+  *)
+    if date -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
+      to_epoch() { date -d "$1" +%s; }
+    elif command -v gdate >/dev/null 2>&1 && gdate -d "2024-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
+      to_epoch() { gdate -d "$1" +%s; }
+    elif date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "2024-01-01T00:00:00+0000" +%s >/dev/null 2>&1; then
+      to_epoch() { date -u -j -f "%Y-%m-%dT%H:%M:%S%z" "${1/Z/+0000}" +%s; }
+    else
+      to_epoch() { python3 -c "import sys,datetime; s=sys.argv[1].replace('Z','+00:00'); print(int(datetime.datetime.fromisoformat(s).timestamp()))" "$1"; }
+    fi
+    if stat -f %m / >/dev/null 2>&1; then
+      _file_mtime() { stat -f %m "$1" 2>/dev/null; }
+    else
+      _file_mtime() { stat -c %Y "$1" 2>/dev/null; }
+    fi
+    ;;
+esac
+
+# $EPOCHSECONDS (bash 5.0+ builtin, zero fork) is used inline as
+# ${EPOCHSECONDS:-$(date +%s)} everywhere "current epoch" is needed, so
+# `date` only forks as a fallback. macOS's system /bin/bash is permanently
+# 3.2.57 (Apple won't ship a GPLv3 bash), so this only pays off on Linux/WSL
+# where /bin/bash is typically 5.x; it's a no-op regression there since the
+# fallback is identical to the prior unconditional `date +%s` call.
+
+# ---- subprocess timeout guard ----
+# Bounds worst-case wall time of external calls (git, jq-on-JSONL) that can
+# stall on large/contended repos or slow disks, so a single slow subprocess
+# never blocks the whole statusline render indefinitely.
+_timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then
+  _timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  _timeout_bin="gtimeout"   # macOS + `brew install coreutils`
 fi
 
-# Platform detection for file mtime (same pattern as to_epoch)
-if stat -f %m / >/dev/null 2>&1; then
-  _file_mtime() { stat -f %m "$1" 2>/dev/null; }
-else
-  _file_mtime() { stat -c %Y "$1" 2>/dev/null; }
-fi
+with_timeout() {
+  local secs="$1"; shift
+  if [ -n "$_timeout_bin" ]; then
+    "$_timeout_bin" "$secs" "$@"
+    return
+  fi
+  # Neither timeout nor gtimeout available: pure-bash fallback.
+  "$@" &
+  local pid=$!
+  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null ) &
+  local watcher=$!
+  wait "$pid" 2>/dev/null
+  local status=$?
+  kill "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+  return "$status"
+}
 
 # ---- pure bash progress bar (no tr subprocess) ----
 progress_bar() {
@@ -196,7 +260,7 @@ cleanup_stale_lock() {
   local lock_mtime lock_age
   lock_mtime=$(_file_mtime "$LOCK_DIR")
   [ -n "$lock_mtime" ] || return 0  # stat 실패 시 안전하게 skip
-  lock_age=$(( $(date +%s) - lock_mtime ))
+  lock_age=$(( ${EPOCHSECONDS:-$(date +%s)} - lock_mtime ))
   [ "$lock_age" -gt 120 ] && rm -rf "$LOCK_DIR"
 }
 
@@ -205,7 +269,7 @@ read_cache() {
     local file_mtime file_age
     file_mtime=$(_file_mtime "$CACHE_FILE")
     [ -n "$file_mtime" ] || return 1  # stat 실패 → 캐시 무효
-    file_age=$(( $(date +%s) - file_mtime ))
+    file_age=$(( ${EPOCHSECONDS:-$(date +%s)} - file_mtime ))
     if [ "$file_age" -lt "$CACHE_TTL" ]; then
       cat "$CACHE_FILE"
       return 0
@@ -235,9 +299,9 @@ update_cache_background() {
     local today_date
     today_date=$(date +%Y%m%d)
 
-    # Optional timeout (coreutils timeout may not be available on macOS)
+    # Optional timeout (reuses the timeout/gtimeout resolution from above)
     local _to=""
-    command -v timeout >/dev/null 2>&1 && _to="timeout 30"
+    [ -n "$_timeout_bin" ] && _to="$_timeout_bin 30"
 
     # shellcheck disable=SC2086 # $_to/$_ccusage_cmd hold multi-word commands; intentionally unquoted
     $_to $_ccusage_cmd blocks --json  >"$tmpdir/blocks"  2>/dev/null &
@@ -260,7 +324,7 @@ update_cache_background() {
     # Atomic write: temp file in same directory ensures rename(2) atomicity
     _tmp_cache=$(mktemp "$CACHE_FILE.XXXXXX")
     if jq -n \
-      --argjson ts "$(date +%s)" \
+      --argjson ts "${EPOCHSECONDS:-$(date +%s)}" \
       --argjson blocks "$blocks" \
       --argjson daily "${daily:-null}" \
       --argjson weekly "${weekly:-null}" \
@@ -279,7 +343,7 @@ if command -v jq >/dev/null 2>&1; then
   IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style \
     ctx_input_tokens ctx_window_size \
     session_cost_usd transcript_path < <(
-    printf '%s' "$input" | jq -r '[
+    jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
       (.session_id // ""),
@@ -289,7 +353,7 @@ if command -v jq >/dev/null 2>&1; then
       (.context_window.context_window_size // ""),
       (.cost.total_cost_usd // ""),
       (.transcript_path // "")
-    ] | join("\u001f")' 2>/dev/null
+    ] | join("\u001f")' 2>/dev/null <<< "$input"
   )
   current_dir="${current_dir//$HOME/~}"
 else
@@ -302,16 +366,29 @@ else
 fi
 
 # ---- git ----
+# All git plumbing is gathered in one function and run under a single
+# timeout, instead of guarding each call, to avoid multiplying subprocess
+# count. A stuck index.lock / slow filesystem degrades to no branch shown
+# (same graceful-degradation contract as the rest of this section).
+_gather_git_info() {
+  git rev-parse --git-dir >/dev/null 2>&1 || return
+  local branch dirty="" behind="" ahead=""
+  branch=$(git branch --show-current 2>/dev/null || git rev-parse --short HEAD 2>/dev/null)
+  [ -n "$branch" ] && [ -n "$(git status --porcelain 2>/dev/null)" ] && dirty="1"
+  read -r behind ahead < <(git rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null)
+  printf '%s\x1f%s\x1f%s\x1f%s' "$branch" "$dirty" "$behind" "$ahead"
+}
+# Real `timeout`/`gtimeout` exec their target directly, so a plain shell
+# function name isn't runnable under it — route through `bash -c` with the
+# function exported so both the real-binary and pure-bash fallback paths
+# in with_timeout() can find and run it.
+export -f _gather_git_info
+
 git_branch=""
-if git rev-parse --git-dir >/dev/null 2>&1; then
-  git_branch=$(git branch --show-current 2>/dev/null || git rev-parse --short HEAD 2>/dev/null)
-
-  if [ -n "$git_branch" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-    git_branch="${git_branch}*"
-  fi
-
-  git_behind=""; git_ahead=""
-  read -r git_behind git_ahead < <(git rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null)
+IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead < <(with_timeout 2 bash -c _gather_git_info)
+if [ -n "$_gb" ]; then
+  git_branch="$_gb"
+  [ -n "$_gdirty" ] && git_branch="${git_branch}*"
   git_ahead_behind=""
   [[ "$git_ahead" =~ ^[0-9]+$ ]] && [ "$git_ahead" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↑${git_ahead}"
   [[ "$git_behind" =~ ^[0-9]+$ ]] && [ "$git_behind" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↓${git_behind}"
@@ -374,12 +451,17 @@ elif [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
   if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
     session_file="$transcript_path"
   else
-    project_dir=$(echo "$current_dir" | sed "s|~|$HOME|g" | sed 's|/|-|g' | sed 's|^-||')
+    project_dir="${current_dir//\~/$HOME}"
+    project_dir="${project_dir//\//-}"
+    project_dir="${project_dir#-}"
     session_file="$HOME/.claude/projects/-${project_dir}/${session_id}.jsonl"
   fi
 
   if [ -f "$session_file" ]; then
-    latest_tokens=$(tail -20 "$session_file" | jq -r 'select(.message.usage) | .message.usage | ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))' 2>/dev/null | tail -1)
+    # shellcheck disable=SC2016 # single quotes intentional: $1 expands inside the inner `bash -c`, not here
+    latest_tokens=$(with_timeout 2 bash -c \
+      'tail -20 "$1" | jq -r "select(.message.usage) | .message.usage | ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))" 2>/dev/null | tail -1' \
+      _ "$session_file")
 
     if [ -n "$latest_tokens" ] && [ "$latest_tokens" -gt 0 ] 2>/dev/null; then
       context_used_tokens="$latest_tokens"
@@ -408,12 +490,12 @@ if [ "$_has_jq" -eq 1 ]; then
   if cached_data=$(read_cache); then
     # Cache hit - extract all fields with single jq call
     IFS=$'\t' read -r blocks_output daily_output weekly_output monthly_output < <(
-      printf '%s' "$cached_data" | jq -r '[
+      jq -r '[
         (.blocks | tostring),
         (.daily | tostring),
         (.weekly | tostring),
         (.monthly | tostring)
-      ] | @tsv' 2>/dev/null
+      ] | @tsv' 2>/dev/null <<< "$cached_data"
     )
   else
     # Cache miss - NO synchronous npx call; trigger background update only
@@ -427,7 +509,7 @@ if [ "$_has_jq" -eq 1 ]; then
   if [ -n "$blocks_output" ] && [ "$blocks_output" != "null" ]; then
     # Extract active block and all fields with single jq call
     IFS=$'\t' read -r cost_usd tot_tokens tpm cache_read cache_creation reset_time_str start_time_str < <(
-      printf '%s' "$blocks_output" | jq -r '
+      jq -r '
         (.blocks[] | select(.isActive == true)) |
         [
           (.costUSD // ""),
@@ -437,7 +519,7 @@ if [ "$_has_jq" -eq 1 ]; then
           (.tokenCounts.cacheCreationInputTokens // 0),
           (.usageLimitResetTime // .endTime // ""),
           (.startTime // "")
-        ] | @tsv' 2>/dev/null | head -n1
+        ] | @tsv' 2>/dev/null <<< "$blocks_output" | head -n1
     )
 
     # Cache hit rate calculation
@@ -450,7 +532,7 @@ if [ "$_has_jq" -eq 1 ]; then
 
     # Session time calculation
     if [ -n "$reset_time_str" ] && [ -n "$start_time_str" ]; then
-      start_sec=$(to_epoch "$start_time_str"); end_sec=$(to_epoch "$reset_time_str"); now_sec=$(date +%s)
+      start_sec=$(to_epoch "$start_time_str"); end_sec=$(to_epoch "$reset_time_str"); now_sec=${EPOCHSECONDS:-$(date +%s)}
       total=$(( end_sec - start_sec )); (( total<1 )) && total=1
       elapsed=$(( now_sec - start_sec )); (( elapsed<0 ))&&elapsed=0; (( elapsed>total ))&&elapsed=$total
       session_pct=$(( elapsed * 100 / total ))
@@ -463,19 +545,19 @@ if [ "$_has_jq" -eq 1 ]; then
   # Daily/Weekly/Monthly - extract with single jq calls
   if [ -n "$daily_output" ] && [ "$daily_output" != "null" ]; then
     IFS=$'\t' read -r today_tokens today_cost < <(
-      printf '%s' "$daily_output" | jq -r '[(.daily[0].totalTokens // ""), (.daily[0].totalCost // "")] | @tsv' 2>/dev/null
+      jq -r '[(.daily[0].totalTokens // ""), (.daily[0].totalCost // "")] | @tsv' 2>/dev/null <<< "$daily_output"
     )
   fi
 
   if [ -n "$weekly_output" ] && [ "$weekly_output" != "null" ]; then
     IFS=$'\t' read -r week_tokens week_cost < <(
-      printf '%s' "$weekly_output" | jq -r '[(.weekly[-1].totalTokens // ""), (.weekly[-1].totalCost // "")] | @tsv' 2>/dev/null
+      jq -r '[(.weekly[-1].totalTokens // ""), (.weekly[-1].totalCost // "")] | @tsv' 2>/dev/null <<< "$weekly_output"
     )
   fi
 
   if [ -n "$monthly_output" ] && [ "$monthly_output" != "null" ]; then
     IFS=$'\t' read -r month_tokens month_cost < <(
-      printf '%s' "$monthly_output" | jq -r '[(.monthly[-1].totalTokens // ""), (.monthly[-1].totalCost // "")] | @tsv' 2>/dev/null
+      jq -r '[(.monthly[-1].totalTokens // ""), (.monthly[-1].totalCost // "")] | @tsv' 2>/dev/null <<< "$monthly_output"
     )
   fi
 fi
@@ -534,9 +616,11 @@ if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
   _sess_cost=""
   if [ -z "$STATUSLINE_HIDE_COST" ]; then
     if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      _sess_cost=" $(printf '$%.2f' "$session_cost_usd")"
+      printf -v _sess_cost_num '$%.2f' "$session_cost_usd"
+      _sess_cost=" $_sess_cost_num"
     elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      _sess_cost=" $(printf '$%.2f' "$cost_usd")"
+      printf -v _sess_cost_num '$%.2f' "$cost_usd"
+      _sess_cost=" $_sess_cost_num"
     fi
   fi
   if [ -n "$rh" ] || [ -n "$rm_val" ]; then
@@ -551,7 +635,7 @@ if [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
   meta_part="🗄 ${_cache}${cache_hit_rate}%${_rst}"
 fi
 if [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
-  tpm_int=$(printf '%.0f' "$tpm")
+  printf -v tpm_int '%.0f' "$tpm"
   tpm_formatted=$(format_tokens "$tpm_int")
   if [ -n "$meta_part" ]; then
     meta_part="${meta_part}  ${_cache}${tpm_formatted}/m${_rst}"
@@ -575,7 +659,7 @@ if [ -z "$STATUSLINE_HIDE_COST" ]; then
   if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
     today_tokens_formatted=$(format_tokens "$today_tokens")
     if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
-      today_cost_formatted=$(printf '%.2f' "$today_cost")
+      printf -v today_cost_formatted '%.2f' "$today_cost"
       line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
     else
       line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
@@ -585,7 +669,7 @@ if [ -z "$STATUSLINE_HIDE_COST" ]; then
   if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
     week_tokens_formatted=$(format_tokens "$week_tokens")
     if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
-      week_cost_formatted=$(printf '%.2f' "$week_cost")
+      printf -v week_cost_formatted '%.2f' "$week_cost"
       week_part="${_week}Week ${week_tokens_formatted}  \$${week_cost_formatted}${_rst}"
     else
       week_part="${_week}Week ${week_tokens_formatted}${_rst}"
@@ -596,7 +680,7 @@ if [ -z "$STATUSLINE_HIDE_COST" ]; then
   if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
     month_tokens_formatted=$(format_tokens "$month_tokens")
     if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
-      month_cost_formatted=$(printf '%.2f' "$month_cost")
+      printf -v month_cost_formatted '%.2f' "$month_cost"
       month_part="${_month}Month ${month_tokens_formatted}  \$${month_cost_formatted}${_rst}"
     else
       month_part="${_month}Month ${month_tokens_formatted}${_rst}"
