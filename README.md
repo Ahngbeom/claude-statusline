@@ -204,6 +204,7 @@ Edit `~/.claude/statusline.sh` to customize:
 |----------|--------|
 | `NO_COLOR=1` | Disable ANSI colors / 색상 비활성화 |
 | `STATUSLINE_UNICODE=1` | Use `▰▱` block chars instead of `=-` (may misalign in some terminals) |
+| `STATUSLINE_MAX_CONTEXT=<tokens>` | Override the context window size used by the JSONL fallback (older Claude Code without the `context_window` stdin field), e.g. for a new model not yet recognized by `get_max_context()` / `context_window` stdin 필드가 없는 구버전에서 fallback 컨텍스트 크기를 오버라이드 (신규 모델 즉시 대응용) |
 
 ### Modify Progress Bar Width / 프로그레스 바 너비 수정
 

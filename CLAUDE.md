@@ -93,6 +93,9 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - **uninstall.sh**: `~/.claude/statusline.sh`와 `~/.claude/stats-cache.json` 삭제, settings.json에서 statusline 필드 제거
 - **scripts/postinstall.sh**: npm `postinstall` 훅. `npm install`로 패키지 설치 시 install.sh와 동일한 역할 수행 (statusline.sh 복사 + settings.json 등록)
 - **scripts/preuninstall.sh**: npm `preuninstall` 훅. `npm uninstall`로 패키지 제거 시 uninstall.sh와 동일한 역할 수행
+
+> ⚠️ **install.sh/uninstall.sh ↔ scripts/postinstall.sh/preuninstall.sh 쌍은 각자 독립 구현이라 함께 수정해야 한다.** curl 원라이너(`install.sh`)는 `check_deps()`에서 jq 부재 시 즉시 종료하지만, npm 훅(`scripts/postinstall.sh`)은 `npm install` 자체를 실패시키지 않기 위해 jq 부재 시 경고만 출력하고 계속 진행한다 — 이 차이는 의도된 것이므로 "동기화"한답시고 없애지 말 것. 두 파일이 완전히 공유 코드를 쓰지 않는 이유는 `install.sh`가 curl로 단일 파일만 받아 실행되는 구조라 별도 lib 파일을 참조할 수 없기 때문(YAGNI로 통합 보류). settings.json 갱신/삭제 로직(jq 커맨드 자체)을 바꿀 때는 4개 파일 모두 확인할 것.
+
 - **.github/workflows/publish.yml**: GitHub Release 발행 시 자동 실행. `verify`(버전 3곳 일치) 잡 이후 `publish-npmjs`/`publish-github-packages` 두 잡이 독립적으로 실행 — 한쪽 레지스트리 발행 실패가 다른 쪽을 막지 않는다 (v1.3.4에서 단일 잡 구조를 분리)
 - **.github/workflows/ci.yml**: push/PR마다 실행. `shellcheck` 린트 + `tests/`의 `bats` 테스트
 

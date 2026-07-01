@@ -46,3 +46,14 @@ load 'test_helper'
   line2="$(sed -n '2p' <<<"$output")"
   [ "$line2" = "🧠 Context 105.0K/200.0K =========----------- 48%" ]
 }
+
+@test "golden: STATUSLINE_MAX_CONTEXT overrides the JSONL fallback window size" {
+  transcript="$FIXTURES_DIR/session_cache_creation.jsonl"
+  json="{\"workspace\":{\"current_dir\":\"/tmp/proj\"},\"model\":{\"display_name\":\"Sonnet 4.5\"},\"session_id\":\"sess-2\",\"transcript_path\":\"$transcript\"}"
+  run run_statusline "$json" STATUSLINE_MAX_CONTEXT=1000000
+  [ "$status" -eq 0 ]
+
+  # 105000 used of the overridden 1,000,000 max -> 90% remaining
+  line2="$(sed -n '2p' <<<"$output")"
+  [ "$line2" = "🧠 Context 105.0K/1.00M ==================-- 90%" ]
+}

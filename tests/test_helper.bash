@@ -16,12 +16,14 @@ load_fn() {
 # Runs statusline.sh as a real subprocess with an isolated HOME (so the
 # developer's real ~/.claude/stats-cache.json is never touched) and a
 # non-git cwd (so git branch detection is deterministic). Always sets
-# NO_COLOR=1 so assertions don't need to match ANSI escape codes.
+# NO_COLOR=1 so assertions don't need to match ANSI escape codes. Extra
+# NAME=value arguments (e.g. STATUSLINE_MAX_CONTEXT=1000000) are exported
+# into the subprocess environment.
 run_statusline() {
-  local json="$1"
+  local json="$1"; shift
   local tmp_home
   tmp_home="$(mktemp -d)"
-  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 bash "$STATUSLINE_SH" )
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"

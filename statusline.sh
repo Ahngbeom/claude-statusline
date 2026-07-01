@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.3.4
+# Version: 1.3.5
 # License: MIT
 #
 # Features:
@@ -14,8 +14,9 @@
 #   - ccusage (recommended): Usage statistics via https://github.com/anthropics/ccusage
 #
 # Environment variables:
-#   STATUSLINE_UNICODE=1  Use ▰▱ block chars (may misalign in some terminals)
-#   NO_COLOR=1            Disable ANSI colors
+#   STATUSLINE_UNICODE=1        Use ▰▱ block chars (may misalign in some terminals)
+#   NO_COLOR=1                  Disable ANSI colors
+#   STATUSLINE_MAX_CONTEXT=<n>  Override JSONL-fallback context window size
 #
 # Performance notes (v1.1.0):
 #   - All color codes are pre-computed variables (no subshell forks)
@@ -43,6 +44,16 @@
 #     bare "1M"/"1m" substrings could false-positive on unrelated model names)
 #   - context_remaining_pct clamped to 0 (stdin/JSONL paths) to avoid negative
 #     percentages when used tokens exceed the reported window size
+#
+# Changes (v1.3.5):
+#   - Added bats-core test suite (tests/) and shellcheck CI, catching:
+#     * get_max_context(): "Claude 3 Haiku" was shadowed by the generic
+#       "Haiku" pattern above it and never matched (same bug class as 1M)
+#     * unused session_txt/fmt_time_hm() dead code (an unnecessary date
+#       subprocess fork on every render with an active ccusage session)
+#   - STATUSLINE_MAX_CONTEXT=<tokens> env var overrides the JSONL-fallback
+#     context window size, for models get_max_context() doesn't recognize yet
+#   - Removed a redundant duplicate progress_bar() call for the session bar
 
 input=$(cat)
 
@@ -334,7 +345,11 @@ if [[ "$ctx_window_size" =~ ^[0-9]+$ ]] && [ "$ctx_window_size" -gt 0 ] 2>/dev/n
   fi
 elif [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
   # Fallback: read session JSONL (older Claude Code without context_window)
-  MAX_CONTEXT=$(get_max_context "$model_name")
+  if [[ "$STATUSLINE_MAX_CONTEXT" =~ ^[0-9]+$ ]]; then
+    MAX_CONTEXT="$STATUSLINE_MAX_CONTEXT"
+  else
+    MAX_CONTEXT=$(get_max_context "$model_name")
+  fi
 
   # Prefer transcript_path from stdin; fall back to manual path construction
   if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
@@ -504,7 +519,6 @@ if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
     _sess_cost=" $(printf '$%.2f' "$cost_usd")"
   fi
   if [ -n "$rh" ] || [ -n "$rm_val" ]; then
-    session_bar=$(progress_bar "$session_pct" 10)
     sess_part="${_session}Session ${tot_formatted}${_sess_cost}  ${rh}h ${rm_val}m ${session_bar}${_rst}"
   else
     sess_part="${_session}Session ${tot_formatted}${_sess_cost}${_rst}"
