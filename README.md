@@ -71,7 +71,18 @@ Edit `~/.claude/settings.json`:
 
 3. Restart Claude Code / Claude Code 재시작
 
-### npm Install (GitHub Packages)
+### npm Install
+
+Install directly from npmjs.com, no authentication required:
+
+npmjs.com에서 직접 설치, 별도 인증 불필요:
+
+```bash
+npm install -g @ahngbeom/claude-statusline
+```
+
+<details>
+<summary>Alternative: GitHub Packages / 대안: GitHub Packages</summary>
 
 > **Note:** GitHub Packages requires authentication.
 > You need a GitHub [Personal Access Token](https://github.com/settings/tokens) with `read:packages` scope.
@@ -86,6 +97,8 @@ Edit `~/.claude/settings.json`:
    ```bash
    npm install -g @ahngbeom/claude-statusline
    ```
+
+</details>
 
 ---
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.3.3
+# Version: 1.3.4
 # License: MIT
 #
 # Features:
@@ -37,6 +37,12 @@
 #     (previously underestimated context after a fresh cache write)
 #   - get_max_context() recognizes 1M-context model variants (e.g. "Opus 4.7 [1m]",
 #     "Sonnet ... 1M context") and reports 1000000 instead of 200000
+#
+# Changes (v1.3.4):
+#   - get_max_context() 1M-context pattern tightened to "[1m]"/"[1M]" (previous
+#     bare "1M"/"1m" substrings could false-positive on unrelated model names)
+#   - context_remaining_pct clamped to 0 (stdin/JSONL paths) to avoid negative
+#     percentages when used tokens exceed the reported window size
 
 input=$(cat)
 
@@ -294,7 +300,7 @@ context_remaining_pct=""
 
 get_max_context() {
   case "$1" in
-    *"1M"*|*"1m"*|*"[1m]"*|*"1M context"*|*"1m context"*) echo "1000000" ;;
+    *"[1m]"*|*"[1M]"*|*"1M context"*|*"1m context"*) echo "1000000" ;;
     *"Opus 4"*|*"opus 4"*|*"Opus"*|*"opus"*)       echo "200000" ;;
     *"Sonnet 4"*|*"sonnet 4"*|*"Sonnet 3.5"*|*"sonnet 3.5"*|*"Sonnet"*|*"sonnet"*) echo "200000" ;;
     *"Haiku 3.5"*|*"haiku 3.5"*|*"Haiku 4"*|*"haiku 4"*|*"Haiku"*|*"haiku"*)       echo "200000" ;;
@@ -323,6 +329,7 @@ if [[ "$ctx_window_size" =~ ^[0-9]+$ ]] && [ "$ctx_window_size" -gt 0 ] 2>/dev/n
     context_max_tokens="$ctx_window_size"
     context_used_pct=$(( ctx_tokens * 100 / ctx_window_size ))
     context_remaining_pct=$(( 100 - context_used_pct ))
+    (( context_remaining_pct < 0 )) && context_remaining_pct=0
     _set_context_color "$context_remaining_pct"
     context_pct="${context_remaining_pct}%"
   fi
@@ -346,6 +353,7 @@ elif [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
       context_max_tokens="$MAX_CONTEXT"
       context_used_pct=$(( latest_tokens * 100 / MAX_CONTEXT ))
       context_remaining_pct=$(( 100 - context_used_pct ))
+      (( context_remaining_pct < 0 )) && context_remaining_pct=0
       _set_context_color "$context_remaining_pct"
       context_pct="${context_remaining_pct}%"
     fi
