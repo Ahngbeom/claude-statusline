@@ -113,7 +113,7 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 
 > ⚠️ **install.sh/uninstall.sh ↔ scripts/postinstall.sh/preuninstall.sh 쌍은 각자 독립 구현이라 함께 수정해야 한다.** curl 원라이너(`install.sh`)는 `check_deps()`에서 jq 부재 시 즉시 종료하지만, npm 훅(`scripts/postinstall.sh`)은 `npm install` 자체를 실패시키지 않기 위해 jq 부재 시 경고만 출력하고 계속 진행한다 — 이 차이는 의도된 것이므로 "동기화"한답시고 없애지 말 것. 두 파일이 완전히 공유 코드를 쓰지 않는 이유는 `install.sh`가 curl로 단일 파일만 받아 실행되는 구조라 별도 lib 파일을 참조할 수 없기 때문(YAGNI로 통합 보류). settings.json 갱신/삭제 로직(jq 커맨드 자체)을 바꿀 때는 4개 파일 모두 확인할 것.
 
-- **.github/workflows/publish.yml**: GitHub Release 발행 시 자동 실행. `verify`(버전 3곳 일치) 잡 이후 `publish-npmjs`/`publish-github-packages` 두 잡이 독립적으로 실행 — 한쪽 레지스트리 발행 실패가 다른 쪽을 막지 않는다 (v1.3.4에서 단일 잡 구조를 분리)
+- **.github/workflows/publish.yml**: GitHub Release 발행 시 자동 실행. `verify`(버전 3곳 일치) 잡 이후 `publish-github-packages` 잡이 실행되어 GitHub Packages에 발행한다. npmjs.com 발행(`publish-npmjs` 잡)은 `NPM_TOKEN` 만료로 v1.3.0/v1.3.1/v1.3.3/v1.3.4/v1.5.0에서 반복적으로 실패해 v1.5.0에서 제거함 — GitHub Packages 단일 발행 구조로 전환
 - **.github/workflows/ci.yml**: push/PR마다 실행. `shellcheck` 린트 + `tests/`의 `bats` 테스트
 
 ### 성능 설계 원칙
@@ -159,8 +159,9 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - 릴리즈 노트 구성: 프로젝트 소개 1줄, Features, Installation one-liner, Changes since 이전 버전, Requirements
 - install.sh URL은 `main` 브랜치 고정 (태그별 URL 아님)
 - `package.json` 버전은 `statusline.sh` 헤더와 반드시 동기화
-- GitHub Release 생성 시 `.github/workflows/publish.yml`이 npmjs.com과 GitHub Packages에 독립된 잡으로 발행 (한쪽 실패가 다른 쪽을 막지 않음)
-- 릴리즈 전 3곳 버전 일치 확인 필수: `statusline.sh` 헤더, `package.json`, git 태그 (`verify` 잡이 자동 검증하므로 불일치 시 두 발행 잡 모두 실행되지 않음)
-- 릴리즈 후 `gh run list --workflow=publish.yml --limit 1`로 `publish-npmjs`/`publish-github-packages` 둘 다 성공했는지 확인할 것 (NPM_TOKEN 만료로 실패했던 v1.3.0/v1.3.1/v1.3.3/v1.3.4 전례 있음). 실패 시 토큰 재발급 후 `gh run rerun <run-id> --failed`로 재시도
+- GitHub Release 생성 시 `.github/workflows/publish.yml`이 GitHub Packages에 발행 (npmjs.com 발행은 v1.5.0에서 제거됨 — 아래 참고)
+- 릴리즈 전 3곳 버전 일치 확인 필수: `statusline.sh` 헤더, `package.json`, git 태그 (`verify` 잡이 자동 검증하므로 불일치 시 발행 잡이 실행되지 않음)
+- 릴리즈 후 `gh run list --workflow=publish.yml --limit 1`로 `publish-github-packages`가 성공했는지 확인할 것
+- **npmjs.com 발행은 v1.5.0에서 중단함.** `NPM_TOKEN`이 짧은 주기로 만료되어 v1.3.0/v1.3.1/v1.3.3/v1.3.4/v1.5.0에서 `publish-npmjs` 잡이 반복적으로 실패했고(매번 수동 토큰 재발급 필요), 유지 비용 대비 이점이 낮아 잡 자체를 제거함. npmjs.com에는 1.4.1까지만 남아 있고 이후 버전은 GitHub Packages에서만 제공
 - push/PR마다 `.github/workflows/ci.yml`(shellcheck + bats)이 별도로 실행되며, 릴리즈 여부와 무관하게 항상 통과해야 함
 - 별도 `CHANGELOG.md`는 두지 않기로 결정함 (2026-07-01). 버전별 변경사항은 `statusline.sh` 헤더 주석 + GitHub Release 노트 2곳으로 충분하며, 세 번째 파일을 추가하면 동기화 부담만 늘어남 (YAGNI)

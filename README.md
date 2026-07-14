@@ -1,7 +1,6 @@
 # claude-statusline
 
 [![GitHub Release](https://img.shields.io/github/v/release/ahngbeom/claude-statusline)](https://github.com/Ahngbeom/claude-statusline/releases)
-[![npm version](https://img.shields.io/npm/v/@ahngbeom/claude-statusline)](https://www.npmjs.com/package/@ahngbeom/claude-statusline)
 [![CI](https://github.com/ahngbeom/claude-statusline/actions/workflows/ci.yml/badge.svg)](https://github.com/ahngbeom/claude-statusline/actions/workflows/ci.yml)
 
 A detailed, informative statusline for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
@@ -77,18 +76,7 @@ Edit `~/.claude/settings.json`:
 
 3. Restart Claude Code / Claude Code 재시작
 
-### npm Install
-
-Install directly from npmjs.com, no authentication required:
-
-npmjs.com에서 직접 설치, 별도 인증 불필요:
-
-```bash
-npm install -g @ahngbeom/claude-statusline
-```
-
-<details>
-<summary>Alternative: GitHub Packages / 대안: GitHub Packages</summary>
+### npm Install (GitHub Packages)
 
 > **Note:** GitHub Packages requires authentication.
 > You need a GitHub [Personal Access Token](https://github.com/settings/tokens) with `read:packages` scope.
@@ -103,8 +91,6 @@ npm install -g @ahngbeom/claude-statusline
    ```bash
    npm install -g @ahngbeom/claude-statusline
    ```
-
-</details>
 
 ---
 
