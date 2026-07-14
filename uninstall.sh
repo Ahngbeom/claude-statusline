@@ -6,6 +6,7 @@ CLAUDE_DIR="$HOME/.claude"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 STATUSLINE_FILE="$CLAUDE_DIR/statusline.sh"
 CACHE_FILE="$CLAUDE_DIR/stats-cache.json"
+RATE_LIMITS_CACHE_FILE="$CLAUDE_DIR/rate-limits-cache.json"
 
 # Colors
 GREEN='\033[0;32m'
@@ -55,6 +56,13 @@ remove_cache() {
     print_success "Removed $CACHE_FILE"
   else
     print_warning "Cache file not found"
+  fi
+
+  if [ -f "$RATE_LIMITS_CACHE_FILE" ]; then
+    rm "$RATE_LIMITS_CACHE_FILE"
+    print_success "Removed $RATE_LIMITS_CACHE_FILE"
+  else
+    print_warning "Rate limits cache file not found"
   fi
 }
 

@@ -71,6 +71,18 @@
 #     printf|jq -> herestring, $(printf ...) -> printf -v, $(date +%s) ->
 #     $EPOCHSECONDS (bash 5+), $(cat) -> read builtin, sed chain -> pure bash
 
+# Changes (Unreleased):
+#   - stdin rate_limits (five_hour/seven_day server-measured usage % and
+#     reset epoch, when Claude Code provides it) is now forwarded as-is to
+#     ~/.claude/rate-limits-cache.json via the existing single jq call (no
+#     extra subprocess fork) -- a side-channel for external tools (e.g.
+#     cc-menutor's reset anchor auto-sync) to read the server's real 5h/7d
+#     reset time instead of guessing from local activity gaps. Not rendered
+#     by this script itself. Skipped (not overwritten) when rate_limits is
+#     absent/empty this render, so a transient gap doesn't clobber a still-
+#     good previous value. uninstall.sh / scripts/preuninstall.sh now also
+#     remove this cache file.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -342,7 +354,7 @@ if command -v jq >/dev/null 2>&1; then
   _has_jq=1
   IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style \
     ctx_input_tokens ctx_window_size \
-    session_cost_usd transcript_path < <(
+    session_cost_usd transcript_path rate_limits_json < <(
     jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
@@ -352,7 +364,8 @@ if command -v jq >/dev/null 2>&1; then
       (.context_window.total_input_tokens // ""),
       (.context_window.context_window_size // ""),
       (.cost.total_cost_usd // ""),
-      (.transcript_path // "")
+      (.transcript_path // ""),
+      (.rate_limits // {} | tostring)
     ] | join("\u001f")' 2>/dev/null <<< "$input"
   )
   current_dir="${current_dir//$HOME/~}"
@@ -363,6 +376,28 @@ else
   session_id=""
   cc_version=""
   output_style=""
+  rate_limits_json=""
+fi
+
+# ---- rate limits cache (side-channel output for external consumers, e.g.
+# cc-menutor's reset anchor auto-sync) ----
+# Claude Code passes rate_limits.five_hour/seven_day (server-measured usage %
+# and reset epoch) to statusLine scripts but never persists it itself. We
+# forward the object as-is (no reshaping needed -- the consumer's schema
+# matches Claude Code's stdin field names 1:1) so any tool can read the
+# server's real reset time instead of guessing from local activity gaps.
+# Skipped (not overwritten) when rate_limits is absent/empty this render
+# (e.g. API-key users, before the session's first API response, or no jq) --
+# staleness is the consumer's job (it checks resets_at against now), so an
+# absent render shouldn't blow away a still-good previous value.
+if [ -n "$rate_limits_json" ] && [ "$rate_limits_json" != "{}" ] && [ "$rate_limits_json" != "null" ]; then
+  _rl_cache="$HOME/.claude/rate-limits-cache.json"
+  _tmp_rl=$(mktemp "$_rl_cache.XXXXXX" 2>/dev/null)
+  if [ -n "$_tmp_rl" ] && printf '%s' "$rate_limits_json" > "$_tmp_rl" 2>/dev/null; then
+    mv "$_tmp_rl" "$_rl_cache"
+  else
+    rm -f "$_tmp_rl"
+  fi
 fi
 
 # ---- git ----
