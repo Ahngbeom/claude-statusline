@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.4.1
+# Version: 1.5.0
 # License: MIT
 #
 # Features:
@@ -71,7 +71,7 @@
 #     printf|jq -> herestring, $(printf ...) -> printf -v, $(date +%s) ->
 #     $EPOCHSECONDS (bash 5+), $(cat) -> read builtin, sed chain -> pure bash
 
-# Changes (Unreleased):
+# Changes (v1.5.0):
 #   - stdin rate_limits (five_hour/seven_day server-measured usage % and
 #     reset epoch, when Claude Code provides it) is now forwarded as-is to
 #     ~/.claude/rate-limits-cache.json via the existing single jq call (no
