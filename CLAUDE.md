@@ -147,7 +147,7 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 ### Usage counter semantics
 
 - Line 3의 `Today` / `Week` / `Month`는 ccusage가 제공하는 **달력 기준** 누적치 (ISO 주, 달력 월). Anthropic의 weekly rate limit은 **rolling 7-day**라 정책 한도 게이지로 직접 환산되지 않음 — 라벨 의미를 바꿀 때는 README의 "Usage Counters" 섹션도 함께 갱신할 것
-- Line 2의 `Session`은 ccusage active block 기준 **5시간 rolling window** (2026-05-06 정책 변경 후에도 윈도우 길이는 동일, capacity만 2배)
+- Line 2의 `Session`은 ccusage active block 기준 **5시간 rolling window** (2026-05-06 정책 변경 후에도 윈도우 길이는 동일, capacity만 2배). 단, stdin `rate_limits.five_hour`(서버 실측 `used_percentage`/`resets_at`, Claude.ai Pro/Max 구독자 한정)가 신선(`resets_at`이 아직 미래)하면 그 값이 ccusage 추정치보다 **우선**한다 — ccusage의 활성 블록은 유휴(>5시간 공백) 후 첫 활동 시각 기준 floating anchor 휴리스틱(`.startTime`/`.usageLimitResetTime // .endTime`)이라 서버가 실제로 관리하는 rolling 5시간 윈도우와 어긋날 수 있기 때문 (`~/personal/cc-menutor`가 동일한 문제를 `rate-limits-cache.json`을 통해 간접적으로 보정하는 것과 같은 원인). 오버라이드는 `session_pct`/`rh`/`rm_val`/`session_bar` 네 값에만 적용되고 `tot_tokens`/`cost_usd`/`tpm`/`cache_hit_rate`는 `rate_limits`에 대응 값이 없어 계속 ccusage 값을 쓴다. `rate_limits`가 없거나 stale이면(과거 `resets_at`, API 키 사용자, 세션 첫 응답 이전 등) 조용히 ccusage 추정치로 폴백 — `Session`은 여전히 ccusage 활성 블록(`tot_tokens`)이 있어야만 렌더링된다(게이트는 바뀌지 않음)
 - JSONL fallback에서 컨텍스트 사용량을 계산할 때는 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` 세 값을 모두 더해야 함 (cache_creation도 컨텍스트 윈도우를 점유)
 - `get_max_context()`의 모델 패턴 매칭은 **구체적인 패턴이 먼저** 와야 함 (`case`는 첫 매치에서 종료). 1M 컨텍스트 변형 패턴을 일반 Opus/Sonnet 분기보다 위에 유지. 동일한 이유로 `"Claude 3 Haiku"`도 일반 `"Haiku"` 분기보다 위에 있어야 함 (v1.3.4에서 발견된 회귀: 일반 패턴이 먼저 있어 3 Haiku 전용 100000 분기가 죽어있었음) — 새 모델 패턴을 추가할 때는 항상 `tests/unit_get_max_context.bats`로 순서를 검증할 것
 

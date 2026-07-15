@@ -83,6 +83,21 @@
 #     good previous value. uninstall.sh / scripts/preuninstall.sh now also
 #     remove this cache file.
 
+# Changes (Unreleased):
+#   - Line 2 Session pct/remaining-time now prefer rate_limits.five_hour
+#     (server-measured used_percentage/resets_at) over the ccusage active
+#     block's startTime/usageLimitResetTime when fresh (resets_at still in
+#     the future). ccusage's block is a floating anchor keyed off the first
+#     activity timestamp after a >5h-idle gap, so it can drift from the
+#     server's real rolling 5h window -- the same gap cc-menutor's reset-
+#     anchor auto-sync works around by reading rate-limits-cache.json
+#     secondhand. This script already receives rate_limits firsthand via
+#     stdin, so it now uses it directly instead of only forwarding it.
+#     ccusage remains the source for tot_tokens/cost_usd/tpm/cache_hit_rate
+#     (rate_limits has no equivalent) and Session still requires an active
+#     ccusage block to render at all -- absent/stale rate_limits silently
+#     falls back to the ccusage estimate, unchanged from prior versions.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -354,7 +369,7 @@ if command -v jq >/dev/null 2>&1; then
   _has_jq=1
   IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style \
     ctx_input_tokens ctx_window_size \
-    session_cost_usd transcript_path rate_limits_json < <(
+    session_cost_usd transcript_path rate_limits_json rl5h_pct rl5h_reset < <(
     jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
@@ -365,7 +380,9 @@ if command -v jq >/dev/null 2>&1; then
       (.context_window.context_window_size // ""),
       (.cost.total_cost_usd // ""),
       (.transcript_path // ""),
-      (.rate_limits // {} | tostring)
+      (.rate_limits // {} | tostring),
+      (.rate_limits.five_hour.used_percentage // ""),
+      (.rate_limits.five_hour.resets_at // "")
     ] | join("\u001f")' 2>/dev/null <<< "$input"
   )
   current_dir="${current_dir//$HOME/~}"
@@ -377,6 +394,8 @@ else
   cc_version=""
   output_style=""
   rate_limits_json=""
+  rl5h_pct=""
+  rl5h_reset=""
 fi
 
 # ---- rate limits cache (side-channel output for external consumers, e.g.
@@ -518,6 +537,7 @@ week_tokens=""; week_cost=""
 month_tokens=""; month_cost=""
 cache_hit_rate=""
 rh=""; rm_val=""
+now_sec=${EPOCHSECONDS:-$(date +%s)}
 
 if [ "$_has_jq" -eq 1 ]; then
   cached_data=""
@@ -567,7 +587,7 @@ if [ "$_has_jq" -eq 1 ]; then
 
     # Session time calculation
     if [ -n "$reset_time_str" ] && [ -n "$start_time_str" ]; then
-      start_sec=$(to_epoch "$start_time_str"); end_sec=$(to_epoch "$reset_time_str"); now_sec=${EPOCHSECONDS:-$(date +%s)}
+      start_sec=$(to_epoch "$start_time_str"); end_sec=$(to_epoch "$reset_time_str")
       total=$(( end_sec - start_sec )); (( total<1 )) && total=1
       elapsed=$(( now_sec - start_sec )); (( elapsed<0 ))&&elapsed=0; (( elapsed>total ))&&elapsed=$total
       session_pct=$(( elapsed * 100 / total ))
@@ -575,6 +595,27 @@ if [ "$_has_jq" -eq 1 ]; then
       rh=$(( remaining / 3600 )); rm_val=$(( (remaining % 3600) / 60 ))
       session_bar=$(progress_bar "$session_pct" 10)
     fi
+  fi
+
+  # rate_limits.five_hour override: Claude Code's server-measured usage % and
+  # reset epoch (stdin, Pro/Max subscribers only) take priority over the
+  # ccusage block estimate above when fresh -- ccusage's block is a floating
+  # anchor keyed off the first activity timestamp in a >5h-idle gap, so it can
+  # drift from the server's real rolling 5h window (see CLAUDE.md "Usage
+  # counter semantics"). Only overrides session_pct/rh/rm_val/session_bar;
+  # tot_tokens/cost_usd/tpm/cache_hit_rate have no rate_limits equivalent and
+  # are left as ccusage reported them. Stale (resets_at in the past, or
+  # absent -- e.g. API-key users, pre-first-response) silently keeps the
+  # ccusage-derived numbers above, same as session_cost_usd's stdin-over-
+  # ccusage precedence elsewhere in this script.
+  if [[ "$rl5h_reset" =~ ^[0-9]+$ ]] && [ "$rl5h_reset" -gt "$now_sec" ] \
+     && [[ "$rl5h_pct" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    printf -v session_pct '%.0f' "$rl5h_pct"
+    (( session_pct < 0 )) && session_pct=0
+    (( session_pct > 100 )) && session_pct=100
+    remaining=$(( rl5h_reset - now_sec ))
+    rh=$(( remaining / 3600 )); rm_val=$(( (remaining % 3600) / 60 ))
+    session_bar=$(progress_bar "$session_pct" 10)
   fi
 
   # Daily/Weekly/Monthly - extract with single jq calls
