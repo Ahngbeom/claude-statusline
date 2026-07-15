@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.5.0
+# Version: 1.6.0
 # License: MIT
 #
 # Features:
@@ -83,7 +83,7 @@
 #     good previous value. uninstall.sh / scripts/preuninstall.sh now also
 #     remove this cache file.
 
-# Changes (Unreleased):
+# Changes (v1.6.0):
 #   - Line 2 Session pct/remaining-time now prefer rate_limits.five_hour
 #     (server-measured used_percentage/resets_at) over the ccusage active
 #     block's startTime/usageLimitResetTime when fresh (resets_at still in
