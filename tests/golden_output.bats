@@ -99,3 +99,43 @@ load 'test_helper'
   line3="$(sed -n '3p' <<<"$output")"
   [ -z "$line3" ]
 }
+
+@test "golden: Today/Week/Month costs from ccusage render via round_money, including single-decimal-digit padding (regression for printf '%.2f' locale bug)" {
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1"}'
+  run run_statusline_with_cache "$json"
+  [ "$status" -eq 0 ]
+
+  # seed_ccusage_cache fixture: daily totalCost=4.32, weekly=9.5, monthly=22.1 --
+  # 9.5/22.1 only have one decimal digit, exercising round_money()'s
+  # zero-padding path (not just its rounding path).
+  [[ "$output" == *'$4.32'* ]]
+  [[ "$output" == *'$9.50'* ]]
+  [[ "$output" == *'$22.10'* ]]
+}
+
+@test "golden: fractional stdin session cost rounds to two decimals (regression for printf '%.2f' locale bug)" {
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1","cost":{"total_cost_usd":12.345}}'
+  run run_statusline_with_cache "$json"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'$12.35'* ]]
+}
+
+@test "golden: fractional tokens-per-minute burn rate rounds correctly (regression for printf '%.0f' locale bug)" {
+  tmp_home="$(mktemp -d)"
+  mkdir -p "$tmp_home/.claude"
+  now=$(date +%s)
+  start_iso=$(date -u -r "$((now - 3600))" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "@$((now - 3600))" +"%Y-%m-%dT%H:%M:%SZ")
+  end_iso=$(date -u -r "$((now + 10800))" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "@$((now + 10800))" +"%Y-%m-%dT%H:%M:%SZ")
+  cat >"$tmp_home/.claude/stats-cache.json" <<EOF
+{"timestamp": $now, "blocks": {"blocks": [{"isActive": true, "costUSD": 1.0, "totalTokens": 500000, "burnRate": {"tokensPerMinute": 1234.7}, "tokenCounts": {"cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}, "startTime": "$start_iso", "usageLimitResetTime": "$end_iso"}]}, "daily": {"daily": []}, "weekly": {"weekly": []}, "monthly": {"monthly": []}}
+EOF
+
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1"}'
+  run bash -c 'cd "$1" && printf "%s" "$2" | HOME="$1" NO_COLOR=1 bash "$3"' _ "$tmp_home" "$json" "$STATUSLINE_SH"
+  [ "$status" -eq 0 ]
+
+  # 1234.7 rounds up to 1235 -> format_tokens(1235) = "1.2K"
+  [[ "$output" == *"1.2K/m"* ]]
+
+  rm -rf "$tmp_home"
+}

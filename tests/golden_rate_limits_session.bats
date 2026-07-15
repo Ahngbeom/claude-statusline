@@ -50,3 +50,33 @@ load 'test_helper'
   line2="$(sed -n '2p' <<<"$output")"
   [[ "$line2" != *"Session"* ]]
 }
+
+@test "rate_limits session override: fractional used_percentage rounds correctly without depending on printf locale parsing" {
+  local resets_at=$(( $(date +%s) + 1800 ))
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1","rate_limits":{"five_hour":{"used_percentage":91.5,"resets_at":'"$resets_at"'}}}'
+  run run_statusline_with_cache "$json"
+
+  [ "$status" -eq 0 ]
+  # 91.5 rounds up to 92% -> floor(92*10/100) = 9 filled / 1 empty.
+  [[ "$output" == *"=========-"* ]]
+}
+
+@test "rate_limits session override: non-numeric used_percentage/resets_at don't break Line 1 parsing" {
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1","rate_limits":{"five_hour":{"used_percentage":{"raw":70,"rounded":70},"resets_at":"soon"}}}'
+  run run_statusline_with_cache "$json"
+
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"/tmp/proj"* ]]
+  [[ "$line1" == *"Opus 4.6"* ]]
+}
+
+@test "rate_limits session override: resets_at far beyond the 5h window (e.g. a ms-vs-s unit mismatch) falls back to the ccusage estimate" {
+  local resets_at=$(( ($(date +%s) + 1800) * 1000 ))
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1","rate_limits":{"five_hour":{"used_percentage":70,"resets_at":'"$resets_at"'}}}'
+  run run_statusline_with_cache "$json"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"==--------"* ]]
+  [[ "$output" != *"=======---"* ]]
+}

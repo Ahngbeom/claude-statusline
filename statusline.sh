@@ -98,6 +98,23 @@
 #     ccusage block to render at all -- absent/stale rate_limits silently
 #     falls back to the ccusage estimate, unchanged from prior versions.
 
+# Changes (Unreleased):
+#   - Fixed a locale bug: printf '%.2f'/'%.0f' both parse AND render through
+#     LC_NUMERIC, so under a comma-decimal locale (e.g. de_DE.UTF-8) they
+#     failed to parse jq-emitted "12.34"-style strings ("invalid number"),
+#     silently substituting 0. Replaced with pure-bash round_money() (cents,
+#     used for Session/Today/Week/Month costs) and round_half_up_int()
+#     (whole numbers, used for the rate_limits session % override and the
+#     tokens/min burn rate) -- both always produce period-decimal output
+#     regardless of locale.
+#   - rate_limits.five_hour.used_percentage/resets_at are now type-checked
+#     in the parsing jq call (must be a JSON number); a malformed shape no
+#     longer risks breaking Line 1 parsing.
+#   - rate_limits.five_hour session override is now upper-bounded to 6h
+#     (5h window + 1h buffer): guards against a resets_at unit mismatch
+#     (e.g. milliseconds instead of seconds) or clock skew rendering an
+#     absurd remaining time instead of silently falling back to ccusage.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -238,6 +255,35 @@ format_tokens() {
   else
     printf '%s' "$num"
   fi
+}
+
+# ---- pure bash money rounding (no printf '%f' locale dependency) ----
+# printf '%.2f' parses AND renders through LC_NUMERIC, so under a
+# comma-decimal locale (e.g. de_DE.UTF-8) it fails to parse a jq-emitted
+# "12.34" string ("invalid number"), silently substituting 0 and printing
+# it back with a comma. This rounds half-up using only integer arithmetic
+# and string slicing (same technique as format_tokens() above), so the
+# result is always period-decimal regardless of locale.
+round_money() {
+  local num="$1" whole cents next
+  whole="${num%%.*}"
+  cents="000"; [[ "$num" == *.* ]] && cents="${num#*.}000"
+  next="${cents:2:1}"; cents="${cents:0:2}"
+  cents=$((10#$cents))
+  [ "$next" -ge 5 ] && cents=$((cents + 1))
+  if [ "$cents" -ge 100 ]; then cents=0; whole=$((whole + 1)); fi
+  printf '%d.%02d' "$whole" "$cents"
+}
+
+# ---- pure bash integer rounding (no printf '%.0f' locale dependency) ----
+# Same locale hazard as round_money() above, for callers that only need a
+# rounded whole number (session %, tokens/min) rather than two decimals.
+round_half_up_int() {
+  local num="$1" whole frac1
+  whole="${num%%.*}"
+  frac1="0"; [[ "$num" == *.* ]] && frac1="${num#*.}" && frac1="${frac1:0:1}"
+  [ "$frac1" -ge 5 ] && whole=$((whole + 1))
+  printf '%d' "$whole"
 }
 
 num_or_zero() { [[ "$1" =~ ^[0-9]+$ ]] && echo "$1" || echo 0; }
@@ -381,8 +427,8 @@ if command -v jq >/dev/null 2>&1; then
       (.cost.total_cost_usd // ""),
       (.transcript_path // ""),
       (.rate_limits // {} | tostring),
-      (.rate_limits.five_hour.used_percentage // ""),
-      (.rate_limits.five_hour.resets_at // "")
+      (.rate_limits.five_hour.used_percentage as $u | if ($u|type)=="number" then $u else "" end),
+      (.rate_limits.five_hour.resets_at as $r | if ($r|type)=="number" then $r else "" end)
     ] | join("\u001f")' 2>/dev/null <<< "$input"
   )
   current_dir="${current_dir//$HOME/~}"
@@ -608,9 +654,16 @@ if [ "$_has_jq" -eq 1 ]; then
   # absent -- e.g. API-key users, pre-first-response) silently keeps the
   # ccusage-derived numbers above, same as session_cost_usd's stdin-over-
   # ccusage precedence elsewhere in this script.
+  # Upper-bounded to 6h (5h window + 1h buffer): guards against a resets_at
+  # unit mismatch (e.g. milliseconds instead of seconds) or clock skew
+  # rendering an absurd remaining time instead of silently falling back.
   if [[ "$rl5h_reset" =~ ^[0-9]+$ ]] && [ "$rl5h_reset" -gt "$now_sec" ] \
+     && [ "$(( rl5h_reset - now_sec ))" -le 21600 ] \
      && [[ "$rl5h_pct" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    printf -v session_pct '%.0f' "$rl5h_pct"
+    # Round rl5h_pct via round_half_up_int() rather than `printf '%.0f'`,
+    # which misparses "." as a decimal point under LC_NUMERIC locales that
+    # use a comma (e.g. de_DE.UTF-8), silently producing session_pct=0.
+    session_pct=$(round_half_up_int "$rl5h_pct")
     (( session_pct < 0 )) && session_pct=0
     (( session_pct > 100 )) && session_pct=100
     remaining=$(( rl5h_reset - now_sec ))
@@ -692,10 +745,10 @@ if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
   _sess_cost=""
   if [ -z "$STATUSLINE_HIDE_COST" ]; then
     if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      printf -v _sess_cost_num '$%.2f' "$session_cost_usd"
+      _sess_cost_num="\$$(round_money "$session_cost_usd")"
       _sess_cost=" $_sess_cost_num"
     elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      printf -v _sess_cost_num '$%.2f' "$cost_usd"
+      _sess_cost_num="\$$(round_money "$cost_usd")"
       _sess_cost=" $_sess_cost_num"
     fi
   fi
@@ -711,7 +764,9 @@ if [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
   meta_part="🗄 ${_cache}${cache_hit_rate}%${_rst}"
 fi
 if [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
-  printf -v tpm_int '%.0f' "$tpm"
+  # Round via round_half_up_int() rather than `printf '%.0f'` -- see
+  # round_money() above for why printf's %f conversion is locale-unsafe here.
+  tpm_int=$(round_half_up_int "$tpm")
   tpm_formatted=$(format_tokens "$tpm_int")
   if [ -n "$meta_part" ]; then
     meta_part="${meta_part}  ${_cache}${tpm_formatted}/m${_rst}"
@@ -735,7 +790,7 @@ if [ -z "$STATUSLINE_HIDE_COST" ]; then
   if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
     today_tokens_formatted=$(format_tokens "$today_tokens")
     if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
-      printf -v today_cost_formatted '%.2f' "$today_cost"
+      today_cost_formatted=$(round_money "$today_cost")
       line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
     else
       line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
@@ -745,7 +800,7 @@ if [ -z "$STATUSLINE_HIDE_COST" ]; then
   if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
     week_tokens_formatted=$(format_tokens "$week_tokens")
     if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
-      printf -v week_cost_formatted '%.2f' "$week_cost"
+      week_cost_formatted=$(round_money "$week_cost")
       week_part="${_week}Week ${week_tokens_formatted}  \$${week_cost_formatted}${_rst}"
     else
       week_part="${_week}Week ${week_tokens_formatted}${_rst}"
@@ -756,7 +811,7 @@ if [ -z "$STATUSLINE_HIDE_COST" ]; then
   if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
     month_tokens_formatted=$(format_tokens "$month_tokens")
     if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
-      printf -v month_cost_formatted '%.2f' "$month_cost"
+      month_cost_formatted=$(round_money "$month_cost")
       month_part="${_month}Month ${month_tokens_formatted}  \$${month_cost_formatted}${_rst}"
     else
       month_part="${_month}Month ${month_tokens_formatted}${_rst}"
