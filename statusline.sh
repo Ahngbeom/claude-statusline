@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.6.0
+# Version: 1.6.1
 # License: MIT
 #
 # Features:
@@ -98,7 +98,7 @@
 #     ccusage block to render at all -- absent/stale rate_limits silently
 #     falls back to the ccusage estimate, unchanged from prior versions.
 
-# Changes (Unreleased):
+# Changes (v1.6.1):
 #   - Fixed a locale bug: printf '%.2f'/'%.0f' both parse AND render through
 #     LC_NUMERIC, so under a comma-decimal locale (e.g. de_DE.UTF-8) they
 #     failed to parse jq-emitted "12.34"-style strings ("invalid number"),
