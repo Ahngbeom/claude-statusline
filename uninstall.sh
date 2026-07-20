@@ -5,8 +5,10 @@
 CLAUDE_DIR="$HOME/.claude"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 STATUSLINE_FILE="$CLAUDE_DIR/statusline.sh"
+CONFIGURE_FILE="$CLAUDE_DIR/configure.sh"
 CACHE_FILE="$CLAUDE_DIR/stats-cache.json"
 RATE_LIMITS_CACHE_FILE="$CLAUDE_DIR/rate-limits-cache.json"
+CONFIG_FILE="$CLAUDE_DIR/statusline.conf"
 
 # Colors
 GREEN='\033[0;32m'
@@ -45,6 +47,13 @@ remove_statusline() {
   else
     print_warning "statusline.sh not found (already removed?)"
   fi
+
+  if [ -f "$CONFIGURE_FILE" ]; then
+    rm "$CONFIGURE_FILE"
+    print_success "Removed $CONFIGURE_FILE"
+  else
+    print_warning "configure.sh not found (already removed?)"
+  fi
 }
 
 # Remove cache file
@@ -63,6 +72,13 @@ remove_cache() {
     print_success "Removed $RATE_LIMITS_CACHE_FILE"
   else
     print_warning "Rate limits cache file not found"
+  fi
+
+  if [ -f "$CONFIG_FILE" ]; then
+    rm "$CONFIG_FILE"
+    print_success "Removed $CONFIG_FILE"
+  else
+    print_warning "Config file not found"
   fi
 }
 

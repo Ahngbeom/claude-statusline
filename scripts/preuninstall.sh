@@ -5,8 +5,10 @@
 CLAUDE_DIR="$HOME/.claude"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 STATUSLINE_FILE="$CLAUDE_DIR/statusline.sh"
+CONFIGURE_FILE="$CLAUDE_DIR/configure.sh"
 CACHE_FILE="$CLAUDE_DIR/stats-cache.json"
 RATE_LIMITS_CACHE_FILE="$CLAUDE_DIR/rate-limits-cache.json"
+CONFIG_FILE="$CLAUDE_DIR/statusline.conf"
 
 # Remove statusline.sh
 if [ -f "$STATUSLINE_FILE" ]; then
@@ -14,6 +16,12 @@ if [ -f "$STATUSLINE_FILE" ]; then
   echo "claude-statusline: removed $STATUSLINE_FILE"
 else
   echo "claude-statusline: statusline.sh not found (already removed?)"
+fi
+
+# Remove configure.sh
+if [ -f "$CONFIGURE_FILE" ]; then
+  rm "$CONFIGURE_FILE"
+  echo "claude-statusline: removed $CONFIGURE_FILE"
 fi
 
 # Remove cache file
@@ -25,6 +33,11 @@ fi
 if [ -f "$RATE_LIMITS_CACHE_FILE" ]; then
   rm "$RATE_LIMITS_CACHE_FILE"
   echo "claude-statusline: removed $RATE_LIMITS_CACHE_FILE"
+fi
+
+if [ -f "$CONFIG_FILE" ]; then
+  rm "$CONFIG_FILE"
+  echo "claude-statusline: removed $CONFIG_FILE"
 fi
 
 # Remove statusline setting from settings.json
