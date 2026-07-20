@@ -21,6 +21,12 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 | 2 | 🧠 Context usage (bar) │ Session time + tokens + cost │ 🗄 Cache + Speed |
 | 3 | 💰 Today │ Week │ Month usage & costs |
 
+On narrow terminals (e.g. a portrait tablet/mobile-style split pane), the layout above automatically
+shrinks — see "Compact Mode" under Customization below.
+
+좁은 터미널(태블릿/모바일처럼 세로로 긴 분할 화면)에서는 위 레이아웃이 자동으로 축약됩니다 —
+아래 "Customization" 섹션의 "축약 모드" 참고.
+
 ### Example Output / 예시 출력
 
 ```
@@ -198,6 +204,67 @@ Edit `~/.claude/statusline.sh` to customize:
 | `STATUSLINE_UNICODE=1` | Use `▰▱` block chars instead of `=-` (may misalign in some terminals) |
 | `STATUSLINE_MAX_CONTEXT=<tokens>` | Override the context window size used by the JSONL fallback (older Claude Code without the `context_window` stdin field), e.g. for a new model not yet recognized by `get_max_context()` / `context_window` stdin 필드가 없는 구버전에서 fallback 컨텍스트 크기를 오버라이드 (신규 모델 즉시 대응용) |
 | `STATUSLINE_HIDE_COST=1` | Hide session cost (Line 2) and all of Line 3 (Today/Week/Month) — for orgs that don't want cost exposed in the terminal / Line 2의 세션 비용과 Line 3 전체(Today/Week/Month)를 숨김 (비용 노출을 꺼리는 조직용) |
+| `STATUSLINE_COMPACT=1` / `=0` | Force the compact layout on or off, overriding `$COLUMNS` auto-detection / 터미널 폭과 무관하게 축약 레이아웃을 강제 on/off |
+| `STATUSLINE_COMPACT_WIDTH=<cols>` | Auto-compact trigger threshold, default `80` — compact mode kicks in when `$COLUMNS` is below this / 자동 축약 전환 기준 폭 (기본값 80) |
+
+### Compact Mode / 축약 모드
+
+Claude Code >= v2.1.153 sets `$COLUMNS`/`$LINES` to the real terminal size before running the
+statusline script (stdout is captured, so `tput cols`-style detection doesn't work from inside the
+script). When `$COLUMNS` is narrower than `STATUSLINE_COMPACT_WIDTH` (default 80 — e.g. a portrait
+tablet/mobile-style split terminal), the statusline automatically switches to a shorter layout:
+directory basename only, no CLI version/output style/Mem on Line 1, no "Context" label word and a
+narrower bar on Line 2, and Line 3 collapsed to just session cost/time + today's cost (no token
+counts, no Week/Month, no cache hit rate/speed).
+
+Claude Code >= v2.1.153는 스크립트 실행 직전에 `$COLUMNS`/`$LINES`를 실제 터미널 크기로 설정해줍니다
+(stdout이 캡처되므로 `tput cols` 방식은 스크립트 내부에서 동작하지 않습니다). `$COLUMNS`가
+`STATUSLINE_COMPACT_WIDTH`(기본값 80) 미만이면 — 예: 태블릿/모바일처럼 세로로 긴 분할 터미널 —
+자동으로 축약 레이아웃으로 전환됩니다: 디렉터리는 basename만, Line 1의 CLI 버전/output style/Mem
+생략, Line 2는 "Context" 라벨 없이 좁은 바, Line 3는 세션 비용/시간 + 오늘 비용만 남기고 토큰
+수·Week/Month·캐시 적중률/속도는 생략됩니다.
+
+```
+📂 myapp  main*↑2 │ Opus 4.6
+🧠 45.2K/200K [====----] 77%
+💰 Sess $0.12 3h 42m │ Today $4.32
+```
+
+Older Claude Code (or when `$COLUMNS` is unset/non-numeric, e.g. manual testing) silently falls back
+to the full layout shown above — same graceful-degradation contract as the rest of the script.
+
+구버전 Claude Code이거나 `$COLUMNS`가 없을 때(수동 테스트 등)는 위의 전체 레이아웃으로 조용히
+폴백됩니다 — 이 스크립트의 다른 부분과 동일한 graceful-degradation 원칙을 따릅니다.
+
+**Resizing mid-session:** Claude Code only re-runs the statusline script on specific triggers — a new
+assistant message, `/compact` finishing, a permission-mode change, or a vim-mode toggle. A bare
+terminal resize with none of those isn't one of them, so the layout can keep showing the old width
+until the next trigger fires (confirmed by testing: resizing alone, with no message sent, does not
+update the statusline). If you want it to react to a resize on its own, add `refreshInterval` (seconds,
+minimum `1`) to `statusLine` in `~/.claude/settings.json` so it re-runs on a timer regardless of
+triggers:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh",
+    "refreshInterval": 2
+  }
+}
+```
+
+This re-runs the script every N seconds even while idle (extra background git/ccusage calls), so only
+enable it if you need that responsiveness.
+
+**세션 도중 리사이즈:** Claude Code는 새 assistant 메시지, `/compact` 완료, permission mode 변경,
+vim mode 토글 — 이 네 가지 트리거가 있을 때만 statusline 스크립트를 재실행합니다. 이 중 아무 것도
+없이 터미널 폭만 조정하면 다음 트리거가 발생하기 전까지 레이아웃이 그대로 유지될 수 있습니다
+(실측 확인: 메시지 전송 없이 리사이즈만 해서는 statusline이 바뀌지 않음). 리사이즈에 즉시 반응하게
+하려면 `~/.claude/settings.json`의 `statusLine`에 `refreshInterval`(초 단위, 최소 `1`)을 추가해
+트리거와 무관하게 주기적으로 재실행되게 하세요(위 JSON 예시 참고). 유휴 상태에서도 N초마다
+스크립트가 다시 실행되어(git/ccusage 조회 포함) 백그라운드 부하가 약간 늘어나므로, 필요할 때만
+켜는 것을 권장합니다.
 
 ### Modify Progress Bar Width / 프로그레스 바 너비 수정
 
