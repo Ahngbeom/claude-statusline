@@ -67,7 +67,13 @@ JSON='{"workspace":{"current_dir":"/tmp/proj/myapp"},"model":{"display_name":"Op
 }
 
 @test "golden: compact mode Line 3 collapses to Sess <cost> <time> │ Today <cost>, no tokens/Week/Month/cache" {
-  run run_statusline_with_cache "$JSON" COLUMNS=40
+  # No stdin cost.total_cost_usd here (unlike the shared $JSON above) so the
+  # Session cost falls through to the seeded ccusage costUSD below -- stdin
+  # cost always takes priority over ccusage's when both are present, so
+  # asserting against $12.34 while also feeding a stdin cost would be
+  # asserting an unreachable value.
+  local json_no_cost='{"workspace":{"current_dir":"/tmp/proj/myapp"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1","version":"1.2.3","output_style":{"name":"concise"},"context_window":{"total_input_tokens":45000,"context_window_size":200000}}'
+  run run_statusline_with_cache "$json_no_cost" COLUMNS=40
   [ "$status" -eq 0 ]
 
   line3="$(sed -n '3p' <<<"$output")"
