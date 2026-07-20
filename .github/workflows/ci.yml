@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Run shellcheck
-        run: shellcheck statusline.sh install.sh uninstall.sh scripts/postinstall.sh scripts/preuninstall.sh tests/test_helper.bash
+        run: shellcheck statusline.sh configure.sh install.sh uninstall.sh scripts/postinstall.sh scripts/preuninstall.sh tests/test_helper.bash
 
   bats:
     runs-on: ubuntu-latest

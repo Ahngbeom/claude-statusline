@@ -2,6 +2,8 @@
 # Shared helpers for statusline.sh bats tests.
 
 STATUSLINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/statusline.sh"
+# shellcheck disable=SC2034 # used by configure.sh .bats files that `load` this helper
+CONFIGURE_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/configure.sh"
 # shellcheck disable=SC2034 # used by .bats files that `load` this helper
 FIXTURES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/fixtures" && pwd)"
 
@@ -72,6 +74,30 @@ run_statusline_with_cache() {
   local tmp_home
   tmp_home="$(mktemp -d)"
   seed_ccusage_cache "$tmp_home"
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
+  local status=$?
+  rm -rf "$tmp_home"
+  return "$status"
+}
+
+# Seeds $1/.claude/statusline.conf with $2 verbatim (KEY=VALUE lines), for
+# tests exercising statusline.sh's config-file loader (see "user config
+# file" section) or configure.sh against an isolated config file.
+seed_config_file() {
+  local home_dir="$1" contents="$2"
+  mkdir -p "$home_dir/.claude"
+  printf '%s\n' "$contents" > "$home_dir/.claude/statusline.conf"
+}
+
+# Like run_statusline, but pre-seeds the isolated HOME with a
+# ~/.claude/statusline.conf containing $2 (see seed_config_file). Extra
+# NAME=value arguments after $2 are exported into the subprocess environment
+# and, per statusline.sh's precedence rule, override the config file.
+run_statusline_with_config() {
+  local json="$1" config="$2"; shift 2
+  local tmp_home
+  tmp_home="$(mktemp -d)"
+  seed_config_file "$tmp_home" "$config"
   ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
