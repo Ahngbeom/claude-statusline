@@ -1,13 +1,14 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.6.1
+# Version: 1.7.0
 # License: MIT
 #
 # Features:
 #   Line 1: Directory + Git branch (dirty */ahead-behind ↑↓) │ Model, CLI version, Output style
 #   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed
 #   Line 3: Daily │ Weekly │ Monthly usage and costs
+#   Compact mode: auto-shrinks the above on narrow terminals (see STATUSLINE_COMPACT below)
 #
 # Requirements:
 #   - jq (required): JSON parsing
@@ -18,6 +19,8 @@
 #   NO_COLOR=1                  Disable ANSI colors
 #   STATUSLINE_MAX_CONTEXT=<n>  Override JSONL-fallback context window size
 #   STATUSLINE_HIDE_COST=1      Hide session cost (Line 2) and all of Line 3
+#   STATUSLINE_COMPACT=1/0      Force compact layout on/off, overriding $COLUMNS
+#   STATUSLINE_COMPACT_WIDTH=<n> Compact-mode auto-trigger threshold (default 80)
 #
 # Performance notes (v1.1.0):
 #   - All color codes are pre-computed variables (no subshell forks)
@@ -115,6 +118,21 @@
 #     (e.g. milliseconds instead of seconds) or clock skew rendering an
 #     absurd remaining time instead of silently falling back to ccusage.
 
+# Changes (v1.7.0):
+#   - Added a compact layout for narrow terminals (e.g. tablet/mobile-style
+#     portrait split panes): Line 1 drops cc_version/output_style/Mem and
+#     shows the directory basename only, Line 2 drops the "Context" label
+#     word and uses a narrower progress bar, Line 3 collapses Session +
+#     Today/Week/Month/Cache/Speed down to "Sess <cost> <time> │ Today
+#     <cost>" only.
+#   - Auto-triggered when $COLUMNS is below STATUSLINE_COMPACT_WIDTH
+#     (default 80); STATUSLINE_COMPACT=1/0 forces the mode regardless of
+#     width. $COLUMNS/$LINES are set by Claude Code >= v2.1.153 right before
+#     running this script (not part of the stdin JSON) -- on older Claude
+#     Code, or when $COLUMNS is unset/non-numeric, this silently falls back
+#     to the existing full layout (same graceful-degradation contract as
+#     everything else in this script).
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -153,6 +171,39 @@ if [ -n "$STATUSLINE_UNICODE" ]; then
 else
   _bar_fill="="; _bar_empty="-"
 fi
+
+# ---- compact mode detection ----
+# Claude Code >= v2.1.153 sets $COLUMNS/$LINES to the real terminal size
+# before running this script (stdout is captured, so tput/ioctl-based width
+# detection can't see it -- see README "Compact mode"). On older Claude Code
+# (or manual testing), $COLUMNS is unset/non-numeric and we fall back to the
+# full layout, unchanged. STATUSLINE_COMPACT=1/0 forces the mode regardless
+# of width; STATUSLINE_COMPACT_WIDTH overrides the default 80-col threshold.
+#
+# NOTE: this function is stateless and always judges the *current* $COLUMNS
+# correctly -- but it only runs when Claude Code re-invokes this script.
+# Per Claude Code's docs, that happens on a new assistant message, /compact
+# finishing, a permission-mode change, or a vim-mode toggle (+ an optional
+# refreshInterval timer in settings.json) -- a bare terminal resize with no
+# other trigger is NOT in that list, so mid-session resizing can visibly lag
+# behind $COLUMNS until the next trigger fires (confirmed by manual testing).
+# That lag is a Claude Code host-app scheduling property, not a bug in this
+# function -- see README "Compact Mode" for the refreshInterval workaround.
+is_compact_mode() {
+  local cols="$1" compact_env="$2" width_env="$3" threshold
+  case "$compact_env" in
+    1) echo 1; return ;;
+    0) echo 0; return ;;
+  esac
+  threshold="${width_env:-80}"
+  [[ "$threshold" =~ ^[0-9]+$ ]] || threshold=80
+  if [[ "$cols" =~ ^[0-9]+$ ]] && [ "$cols" -lt "$threshold" ]; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+_compact=$(is_compact_mode "${COLUMNS:-}" "${STATUSLINE_COMPACT:-}" "${STATUSLINE_COMPACT_WIDTH:-}")
 
 # ---- time helpers ----
 # $OSTYPE is a bash builtin (zero fork) and never changes for the life of
@@ -702,121 +753,188 @@ if [ -z "$NO_COLOR" ]; then
 fi
 
 # ---- render statusline ----
-# Line 1: 📂 dir  branch │ model  cc_ver  style
-printf '📂 %s%s%s' "$_dir" "$current_dir" "$_rst"
-if [ -n "$git_branch" ]; then
-  printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
-fi
-printf '  %s│%s' "$_sep" "$_rst"
-printf ' %s%s%s' "$_model" "$model_name" "$_rst"
-if [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
-  printf '  %sv%s%s' "$_ccver" "$cc_version" "$_rst"
-fi
-if [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
-  printf '  %s%s%s' "$_style" "$output_style" "$_rst"
-fi
-if [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
-  if [ "$mem_pct" -ge 80 ]; then
-    _mem_color="$_mem_crit"
-  elif [ "$mem_pct" -ge 60 ]; then
-    _mem_color="$_mem_warn"
-  else
-    _mem_color="$_mem_ok"
-  fi
-  printf '  %s│%s %s💻 Mem %d%%%s' "$_sep" "$_rst" "$_mem_color" "$mem_pct" "$_rst"
-fi
+_ctx_bar_width=$(( _compact ? 8 : 20 ))
 
-# Line 2: 🧠 Context ... │ Session ... │ 🗄 cache  speed
-# Build each section independently, then join with │ separators
-ctx_part=""
-if [ -n "$context_pct" ] && [ -n "$context_used_tokens" ]; then
-  context_bar=$(progress_bar "$context_remaining_pct" 20)
-  used_formatted=$(format_tokens "$context_used_tokens")
-  max_formatted=$(format_tokens "$context_max_tokens")
-  ctx_part="🧠 ${_ctx}Context ${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
+if [ "$_compact" -eq 1 ]; then
+  # Compact layout for narrow terminals (see README "Compact mode"):
+  # Line 1 drops cc_version/output_style/Mem and shows the dir basename only.
+  # Line 2 drops the "Context" label word and uses a narrower bar.
+  # Line 3 collapses Session+Today/Week/Month/Cache/Speed down to
+  # "Sess <cost> <time>  │  Today <cost>" -- token counts, the session bar,
+  # Week/Month and cache/speed are all omitted.
+  printf '📂 %s%s%s' "$_dir" "${current_dir##*/}" "$_rst"
+  if [ -n "$git_branch" ]; then
+    printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
+  fi
+  printf '  %s│%s' "$_sep" "$_rst"
+  printf ' %s%s%s' "$_model" "$model_name" "$_rst"
+
+  # Line 2: 🧠 used/max bar pct%
+  ctx_part=""
+  if [ -n "$context_pct" ] && [ -n "$context_used_tokens" ]; then
+    context_bar=$(progress_bar "$context_remaining_pct" "$_ctx_bar_width")
+    used_formatted=$(format_tokens "$context_used_tokens")
+    max_formatted=$(format_tokens "$context_max_tokens")
+    ctx_part="🧠 ${_ctx}${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
+  else
+    ctx_part="🧠 ${_ctx}···${_rst}"
+  fi
+  line2="$ctx_part"
+
+  # Line 3: 💰 Sess <cost> <time>  │  Today <cost>
+  sess_part=""
+  if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
+    _sess_cost=""
+    if [ -z "$STATUSLINE_HIDE_COST" ]; then
+      if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        _sess_cost=" \$$(round_money "$session_cost_usd")"
+      elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        _sess_cost=" \$$(round_money "$cost_usd")"
+      fi
+    fi
+    _sess_time=""
+    if [ -n "$rh" ] || [ -n "$rm_val" ]; then
+      _sess_time=" ${rh}h ${rm_val}m"
+    fi
+    if [ -n "$_sess_cost" ] || [ -n "$_sess_time" ]; then
+      sess_part="${_session}Sess${_sess_cost}${_sess_time}${_rst}"
+    fi
+  fi
+
+  today_part=""
+  if [ -z "$STATUSLINE_HIDE_COST" ] && [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
+    today_cost_formatted=$(round_money "$today_cost")
+    today_part="${_today}Today \$${today_cost_formatted}${_rst}"
+  fi
+
+  line3=""
+  if [ -n "$sess_part" ]; then
+    line3="💰 ${sess_part}"
+  fi
+  if [ -n "$today_part" ]; then
+    if [ -n "$line3" ]; then
+      line3="${line3}  ${_sep}│${_rst} ${today_part}"
+    else
+      line3="💰 ${today_part}"
+    fi
+  fi
 else
-  ctx_part="🧠 ${_ctx}Context ···${_rst}"
-fi
+  # Line 1: 📂 dir  branch │ model  cc_ver  style
+  printf '📂 %s%s%s' "$_dir" "$current_dir" "$_rst"
+  if [ -n "$git_branch" ]; then
+    printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
+  fi
+  printf '  %s│%s' "$_sep" "$_rst"
+  printf ' %s%s%s' "$_model" "$model_name" "$_rst"
+  if [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
+    printf '  %sv%s%s' "$_ccver" "$cc_version" "$_rst"
+  fi
+  if [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
+    printf '  %s%s%s' "$_style" "$output_style" "$_rst"
+  fi
+  if [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
+    if [ "$mem_pct" -ge 80 ]; then
+      _mem_color="$_mem_crit"
+    elif [ "$mem_pct" -ge 60 ]; then
+      _mem_color="$_mem_warn"
+    else
+      _mem_color="$_mem_ok"
+    fi
+    printf '  %s│%s %s💻 Mem %d%%%s' "$_sep" "$_rst" "$_mem_color" "$mem_pct" "$_rst"
+  fi
 
-sess_part=""
-if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
-  tot_formatted=$(format_tokens "$tot_tokens")
-  # Session cost: prefer stdin cost.total_cost_usd (real-time), fallback to ccusage blocks cost_usd
-  _sess_cost=""
-  if [ -z "$STATUSLINE_HIDE_COST" ]; then
-    if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      _sess_cost_num="\$$(round_money "$session_cost_usd")"
-      _sess_cost=" $_sess_cost_num"
-    elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      _sess_cost_num="\$$(round_money "$cost_usd")"
-      _sess_cost=" $_sess_cost_num"
+  # Line 2: 🧠 Context ... │ Session ... │ 🗄 cache  speed
+  # Build each section independently, then join with │ separators
+  ctx_part=""
+  if [ -n "$context_pct" ] && [ -n "$context_used_tokens" ]; then
+    context_bar=$(progress_bar "$context_remaining_pct" "$_ctx_bar_width")
+    used_formatted=$(format_tokens "$context_used_tokens")
+    max_formatted=$(format_tokens "$context_max_tokens")
+    ctx_part="🧠 ${_ctx}Context ${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
+  else
+    ctx_part="🧠 ${_ctx}Context ···${_rst}"
+  fi
+
+  sess_part=""
+  if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
+    tot_formatted=$(format_tokens "$tot_tokens")
+    # Session cost: prefer stdin cost.total_cost_usd (real-time), fallback to ccusage blocks cost_usd
+    _sess_cost=""
+    if [ -z "$STATUSLINE_HIDE_COST" ]; then
+      if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        _sess_cost_num="\$$(round_money "$session_cost_usd")"
+        _sess_cost=" $_sess_cost_num"
+      elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        _sess_cost_num="\$$(round_money "$cost_usd")"
+        _sess_cost=" $_sess_cost_num"
+      fi
+    fi
+    if [ -n "$rh" ] || [ -n "$rm_val" ]; then
+      sess_part="${_session}Session ${tot_formatted}${_sess_cost}  ${rh}h ${rm_val}m ${session_bar}${_rst}"
+    else
+      sess_part="${_session}Session ${tot_formatted}${_sess_cost}${_rst}"
     fi
   fi
-  if [ -n "$rh" ] || [ -n "$rm_val" ]; then
-    sess_part="${_session}Session ${tot_formatted}${_sess_cost}  ${rh}h ${rm_val}m ${session_bar}${_rst}"
-  else
-    sess_part="${_session}Session ${tot_formatted}${_sess_cost}${_rst}"
-  fi
-fi
 
-meta_part=""
-if [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
-  meta_part="🗄 ${_cache}${cache_hit_rate}%${_rst}"
-fi
-if [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
-  # Round via round_half_up_int() rather than `printf '%.0f'` -- see
-  # round_money() above for why printf's %f conversion is locale-unsafe here.
-  tpm_int=$(round_half_up_int "$tpm")
-  tpm_formatted=$(format_tokens "$tpm_int")
+  meta_part=""
+  if [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
+    meta_part="🗄 ${_cache}${cache_hit_rate}%${_rst}"
+  fi
+  if [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
+    # Round via round_half_up_int() rather than `printf '%.0f'` -- see
+    # round_money() above for why printf's %f conversion is locale-unsafe here.
+    tpm_int=$(round_half_up_int "$tpm")
+    tpm_formatted=$(format_tokens "$tpm_int")
+    if [ -n "$meta_part" ]; then
+      meta_part="${meta_part}  ${_cache}${tpm_formatted}/m${_rst}"
+    else
+      meta_part="${_cache}${tpm_formatted}/m${_rst}"
+    fi
+  fi
+
+  # Assemble line2
+  line2="$ctx_part"
+  if [ -n "$sess_part" ]; then
+    line2="${line2}  ${_sep}│${_rst} ${sess_part}"
+  fi
   if [ -n "$meta_part" ]; then
-    meta_part="${meta_part}  ${_cache}${tpm_formatted}/m${_rst}"
-  else
-    meta_part="${_cache}${tpm_formatted}/m${_rst}"
-  fi
-fi
-
-# Assemble line2
-line2="$ctx_part"
-if [ -n "$sess_part" ]; then
-  line2="${line2}  ${_sep}│${_rst} ${sess_part}"
-fi
-if [ -n "$meta_part" ]; then
-  line2="${line2}  ${_sep}│${_rst} ${meta_part}"
-fi
-
-# Line 3: 💰 Today ... │ Week ... │ Month ...
-line3=""
-if [ -z "$STATUSLINE_HIDE_COST" ]; then
-  if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
-    today_tokens_formatted=$(format_tokens "$today_tokens")
-    if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
-      today_cost_formatted=$(round_money "$today_cost")
-      line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
-    else
-      line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
-    fi
+    line2="${line2}  ${_sep}│${_rst} ${meta_part}"
   fi
 
-  if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
-    week_tokens_formatted=$(format_tokens "$week_tokens")
-    if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
-      week_cost_formatted=$(round_money "$week_cost")
-      week_part="${_week}Week ${week_tokens_formatted}  \$${week_cost_formatted}${_rst}"
-    else
-      week_part="${_week}Week ${week_tokens_formatted}${_rst}"
+  # Line 3: 💰 Today ... │ Week ... │ Month ...
+  line3=""
+  if [ -z "$STATUSLINE_HIDE_COST" ]; then
+    if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
+      today_tokens_formatted=$(format_tokens "$today_tokens")
+      if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
+        today_cost_formatted=$(round_money "$today_cost")
+        line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
+      else
+        line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
+      fi
     fi
-    if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${week_part}"; else line3="${week_part}"; fi
-  fi
 
-  if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
-    month_tokens_formatted=$(format_tokens "$month_tokens")
-    if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
-      month_cost_formatted=$(round_money "$month_cost")
-      month_part="${_month}Month ${month_tokens_formatted}  \$${month_cost_formatted}${_rst}"
-    else
-      month_part="${_month}Month ${month_tokens_formatted}${_rst}"
+    if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
+      week_tokens_formatted=$(format_tokens "$week_tokens")
+      if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
+        week_cost_formatted=$(round_money "$week_cost")
+        week_part="${_week}Week ${week_tokens_formatted}  \$${week_cost_formatted}${_rst}"
+      else
+        week_part="${_week}Week ${week_tokens_formatted}${_rst}"
+      fi
+      if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${week_part}"; else line3="${week_part}"; fi
     fi
-    if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${month_part}"; else line3="${month_part}"; fi
+
+    if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
+      month_tokens_formatted=$(format_tokens "$month_tokens")
+      if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
+        month_cost_formatted=$(round_money "$month_cost")
+        month_part="${_month}Month ${month_tokens_formatted}  \$${month_cost_formatted}${_rst}"
+      else
+        month_part="${_month}Month ${month_tokens_formatted}${_rst}"
+      fi
+      if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${month_part}"; else line3="${month_part}"; fi
+    fi
   fi
 fi
 

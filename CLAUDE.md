@@ -87,6 +87,22 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 캐시 파일을 건드리지 않고 조용히 건너뛴다(일시적으로 값이 빠진 렌더 한 번 때문에 여전히 유효한
 이전 값을 지우지 않기 위함).
 
+`$COLUMNS`/`$LINES`는 위 stdin JSON에 포함되지 않는다 — Claude Code >= v2.1.153이 이 스크립트를
+실행하기 **직전에 환경변수로 주입**하는 값이다(캡처된 stdout에는 실제 터미널이 연결되어 있지 않아
+`tput cols` 등 직접 조회가 동작하지 않으므로). `is_compact_mode()`가 이 값으로 좁은 터미널(태블릿/
+모바일 분할 화면 등)을 자동 감지해 축약 레이아웃으로 전환한다 — 자세한 내용은 `# ---- compact mode
+detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$COLUMNS` 미설정 시에는 기존
+전체 레이아웃으로 조용히 폴백한다.
+
+`is_compact_mode()`는 stateless라 실행될 때마다 항상 그 시점 `$COLUMNS`를 정확히 판정하지만, 실행
+자체는 Claude Code가 트리거해야 일어난다. 공식 문서 기준 재실행 트리거는 새 assistant 메시지 /
+`/compact` 완료 / permission mode 변경 / vim mode 토글 네 가지(+ 설정 시 `refreshInterval` 타이머)뿐이고
+**순수 터미널 리사이즈는 이 목록에 없다** — 실측으로 확인됨: 세션 도중 다른 트리거 없이 창 폭만
+줄이면 statusline이 즉시 바뀌지 않고 다음 트리거까지 이전 레이아웃을 유지한다. 이는 `statusline.sh`
+버그가 아니라 Claude Code 호스트의 재실행 스케줄링 특성이라 스크립트 쪽에서 고칠 수 없다 — 즉시
+반영이 필요하면 `~/.claude/settings.json`의 `statusLine.refreshInterval`(초 단위)을 안내할 것(README
+"Compact Mode" 참고).
+
 ### statusline.sh 내부 구조
 
 섹션 마커(`# ---- name ----`)로 구분. `grep -n '# ----' statusline.sh`로 경계 확인:
@@ -95,13 +111,14 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 |------|------|------|
 | 색상 변수 | `# ---- pre-computed color variables` | `NO_COLOR` 대응, 서브셸 없이 ANSI 코드 사전 계산 |
 | progress bar 문자 | `# ---- progress bar characters` | `STATUSLINE_UNICODE` 여부로 `▰▱` 또는 `=-` 선택 |
+| compact mode 감지 | `# ---- compact mode detection` | `$COLUMNS`/`STATUSLINE_COMPACT`/`STATUSLINE_COMPACT_WIDTH`로 `is_compact_mode()` 판정, `_compact` 변수에 저장 |
 | 헬퍼 함수 | `# ---- time helpers`, `# ---- pure bash progress bar`, `# ---- pure bash format_tokens` | `to_epoch()`, `progress_bar()`, `format_tokens()`, `get_mem_usage()` 등 순수 bash |
 | 캐싱 레이어 | `# ---- cache helpers for ccusage data` | ccusage 결과 캐시, 4개 명령 병렬 실행, atomic write + lock |
 | 입력 파싱 | `# ---- parse input with single jq call` | 단일 jq 호출, Unit Separator(0x1f) 구분자. `rate_limits`도 이 한 번의 jq 호출에서 함께 추출(전용 서브프로세스 추가 없음) |
 | rate limits 캐시 | `# ---- rate limits cache` | stdin `rate_limits`를 변형 없이 `~/.claude/rate-limits-cache.json`에 atomic write(외부 소비자용 side-channel — 이 스크립트의 stdout 렌더링과 무관) |
 | 컨텍스트 계산 | `# ---- context window calculation` | stdin context_window 우선, JSONL fallback |
 | ccusage 통합 | `# ---- ccusage integration` | 일/주/월 통계, 세션 시간, 캐시 히트율 |
-| 렌더링 | `# ---- render statusline` | 3줄 출력 조립 |
+| 렌더링 | `# ---- render statusline` | `$_compact` 값으로 축약/전체 레이아웃 분기 후 3줄 출력 조립 |
 
 ### 파일 역할
 
@@ -140,6 +157,8 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 - `STATUSLINE_UNICODE=1` 환경변수로 `▰▱` 블록 문자 활성화 (기본값: ASCII `=-`)
 - `STATUSLINE_MAX_CONTEXT=<tokens>` 환경변수로 JSONL fallback 컨텍스트 윈도우 크기 오버라이드 (신규 모델 즉시 대응)
 - `STATUSLINE_HIDE_COST=1` 환경변수로 세션 비용(Line 2)과 Line 3 전체 숨김
+- `STATUSLINE_COMPACT=1`/`=0` 환경변수로 축약 레이아웃 강제 on/off (미설정 시 `$COLUMNS` 자동 감지)
+- `STATUSLINE_COMPACT_WIDTH=<cols>` 환경변수로 자동 축약 전환 기준 폭 오버라이드 (기본값 80)
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
 - Git 브랜치명은 dirty(`*`)/ahead-behind(`↑N↓N`) 표시를 포함하며, upstream 미설정 시 ahead/behind는 조용히 생략됨 (graceful degradation과 동일한 원칙)
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
