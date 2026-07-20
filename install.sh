@@ -8,6 +8,7 @@ REPO="ahngbeom/claude-statusline"
 CLAUDE_DIR="$HOME/.claude"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 STATUSLINE_FILE="$CLAUDE_DIR/statusline.sh"
+CONFIGURE_FILE="$CLAUDE_DIR/configure.sh"
 
 # Colors
 RED='\033[0;31m'
@@ -96,6 +97,17 @@ download_statusline() {
   print_success "Downloaded to $STATUSLINE_FILE"
 }
 
+# Download configure.sh (per-user settings CLI/TUI)
+download_configure() {
+  print_step "Downloading configure.sh..."
+
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/main/configure.sh" \
+    -o "$CONFIGURE_FILE"
+  chmod +x "$CONFIGURE_FILE"
+
+  print_success "Downloaded to $CONFIGURE_FILE"
+}
+
 # Update settings.json
 update_settings() {
   print_step "Updating Claude Code settings..."
@@ -132,6 +144,8 @@ print_completion() {
   echo ""
   echo -e "  ${YELLOW}Restart Claude Code to see the statusline.${NC}"
   echo ""
+  echo "  Customize what's shown: ~/.claude/configure.sh"
+  echo ""
   echo "  To uninstall:"
   echo "    curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | bash"
   echo ""
@@ -143,6 +157,7 @@ main() {
   check_deps
   create_claude_dir
   download_statusline
+  download_configure
   update_settings
   print_completion
 }
