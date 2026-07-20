@@ -64,11 +64,13 @@ curl -fsSL https://raw.githubusercontent.com/ahngbeom/claude-statusline/main/ins
 
 ### Manual Install / 수동 설치
 
-1. Download statusline.sh / statusline.sh 다운로드:
+1. Download statusline.sh and configure.sh / statusline.sh와 configure.sh 다운로드:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ahngbeom/claude-statusline/main/statusline.sh \
   -o ~/.claude/statusline.sh
-chmod +x ~/.claude/statusline.sh
+curl -fsSL https://raw.githubusercontent.com/ahngbeom/claude-statusline/main/configure.sh \
+  -o ~/.claude/configure.sh
+chmod +x ~/.claude/statusline.sh ~/.claude/configure.sh
 ```
 
 2. Update settings / 설정 업데이트:
@@ -190,11 +192,31 @@ Line 2의 `Session` 시간/토큰은 ccusage가 추적하는 **5시간 rolling w
 
 ---
 
+## Configuration Interface / 설정 인터페이스
+
+`configure.sh` (installed next to `statusline.sh` in `~/.claude/`) lets each user persist their own
+display preferences to `~/.claude/statusline.conf`, instead of exporting environment variables in a
+shell profile. An environment variable that's already set always takes priority over the config file.
+
+`configure.sh`(`statusline.sh`와 같은 `~/.claude/`에 설치됨)로 각 사용자가 자신의 표시 설정을
+셸 프로필에 환경변수를 export하는 대신 `~/.claude/statusline.conf`에 영구 저장할 수 있습니다.
+이미 설정된 환경변수는 항상 설정 파일보다 우선합니다.
+
+```bash
+~/.claude/configure.sh              # interactive menu (colors, compact mode, per-line toggles, preview)
+~/.claude/configure.sh list         # show every setting: effective value + source (env/config/default)
+~/.claude/configure.sh set STATUSLINE_SHOW_WEEK 0
+~/.claude/configure.sh get STATUSLINE_SHOW_WEEK
+~/.claude/configure.sh unset STATUSLINE_SHOW_WEEK   # revert to default
+~/.claude/configure.sh reset -y                     # remove the whole config file
+~/.claude/configure.sh preview                      # render statusline.sh with current settings
+```
+
 ## Customization / 커스터마이징
 
-Edit `~/.claude/statusline.sh` to customize:
+Use `configure.sh` above, or edit `~/.claude/statusline.sh` directly for anything not exposed there:
 
-`~/.claude/statusline.sh`를 편집하여 커스터마이징:
+위 `configure.sh`를 사용하거나, 거기서 다루지 않는 항목은 `~/.claude/statusline.sh`를 직접 편집하세요:
 
 ### Environment Variables / 환경 변수
 
@@ -206,6 +228,27 @@ Edit `~/.claude/statusline.sh` to customize:
 | `STATUSLINE_HIDE_COST=1` | Hide session cost (Line 2) and all of Line 3 (Today/Week/Month) — for orgs that don't want cost exposed in the terminal / Line 2의 세션 비용과 Line 3 전체(Today/Week/Month)를 숨김 (비용 노출을 꺼리는 조직용) |
 | `STATUSLINE_COMPACT=1` / `=0` | Force the compact layout on or off, overriding `$COLUMNS` auto-detection / 터미널 폭과 무관하게 축약 레이아웃을 강제 on/off |
 | `STATUSLINE_COMPACT_WIDTH=<cols>` | Auto-compact trigger threshold, default `80` — compact mode kicks in when `$COLUMNS` is below this / 자동 축약 전환 기준 폭 (기본값 80) |
+| `STATUSLINE_CONFIG_FILE=<path>` | Override the `~/.claude/statusline.conf` path read/written by `configure.sh` / `configure.sh`가 읽고 쓰는 설정 파일 경로 오버라이드 |
+
+### Per-line Display Toggles / 라인별 표시 토글
+
+All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0` also skip the underlying git/memory subprocess call, not just the rendering.
+
+전부 기본값 `1`(표시)이며, `0`으로 설정하면 숨겨집니다. `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`은 렌더링뿐 아니라 해당 git/메모리 서브프로세스 호출 자체도 건너뜁니다.
+
+| Variable | Hides |
+|----------|-------|
+| `STATUSLINE_SHOW_GIT=0` | Line 1 git branch segment entirely / Line 1 git 브랜치 세그먼트 전체 |
+| `STATUSLINE_SHOW_GIT_STATUS=0` | Only the dirty(`*`)/ahead-behind(`↑↓`) markers (branch name stays) / dirty·ahead-behind 표시만 (브랜치명은 유지) |
+| `STATUSLINE_SHOW_CC_VERSION=0` | Line 1 CLI version (`v1.0.44`) |
+| `STATUSLINE_SHOW_OUTPUT_STYLE=0` | Line 1 output style |
+| `STATUSLINE_SHOW_MEM=0` | Line 1 `💻 Mem NN%` |
+| `STATUSLINE_SHOW_SESSION=0` | Line 2 Session segment (tokens/cost/time/bar) |
+| `STATUSLINE_SHOW_CACHE=0` | Line 2 `🗄 NN%` cache hit rate |
+| `STATUSLINE_SHOW_SPEED=0` | Line 2 tokens/min |
+| `STATUSLINE_SHOW_TODAY=0` | Line 3 Today |
+| `STATUSLINE_SHOW_WEEK=0` | Line 3 Week |
+| `STATUSLINE_SHOW_MONTH=0` | Line 3 Month |
 
 ### Compact Mode / 축약 모드
 
@@ -356,5 +399,5 @@ Issues and pull requests are welcome!
 bats tests/
 
 # Requires shellcheck: brew install shellcheck
-shellcheck statusline.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
+shellcheck statusline.sh configure.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
 ```
