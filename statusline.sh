@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.7.0
+# Version: 1.8.0
 # License: MIT
 #
 # Features:
@@ -9,6 +9,8 @@
 #   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed
 #   Line 3: Daily │ Weekly │ Monthly usage and costs
 #   Compact mode: auto-shrinks the above on narrow terminals (see STATUSLINE_COMPACT below)
+#   Per-user customization: sibling configure.sh CLI/TUI persists settings to
+#   ~/.claude/statusline.conf (see "Changes (v1.8.0)" below)
 #
 # Requirements:
 #   - jq (required): JSON parsing
@@ -21,6 +23,18 @@
 #   STATUSLINE_HIDE_COST=1      Hide session cost (Line 2) and all of Line 3
 #   STATUSLINE_COMPACT=1/0      Force compact layout on/off, overriding $COLUMNS
 #   STATUSLINE_COMPACT_WIDTH=<n> Compact-mode auto-trigger threshold (default 80)
+#   STATUSLINE_CONFIG_FILE=<path> Override the ~/.claude/statusline.conf path
+#   STATUSLINE_SHOW_GIT=1/0          Line 1 git branch segment (default 1)
+#   STATUSLINE_SHOW_GIT_STATUS=1/0   Dirty(*)/ahead-behind(↑↓) markers only (default 1)
+#   STATUSLINE_SHOW_CC_VERSION=1/0   Line 1 CLI version (default 1)
+#   STATUSLINE_SHOW_OUTPUT_STYLE=1/0 Line 1 output style (default 1)
+#   STATUSLINE_SHOW_MEM=1/0          Line 1 memory indicator (default 1)
+#   STATUSLINE_SHOW_SESSION=1/0      Line 2 Session segment (default 1)
+#   STATUSLINE_SHOW_CACHE=1/0        Line 2 cache hit rate (default 1)
+#   STATUSLINE_SHOW_SPEED=1/0        Line 2 tokens/min (default 1)
+#   STATUSLINE_SHOW_TODAY=1/0        Line 3 Today (default 1)
+#   STATUSLINE_SHOW_WEEK=1/0         Line 3 Week (default 1)
+#   STATUSLINE_SHOW_MONTH=1/0        Line 3 Month (default 1)
 #
 # Performance notes (v1.1.0):
 #   - All color codes are pre-computed variables (no subshell forks)
@@ -133,9 +147,66 @@
 #     to the existing full layout (same graceful-degradation contract as
 #     everything else in this script).
 
+# Changes (v1.8.0):
+#   - Added a per-user config file: ~/.claude/statusline.conf (KEY=VALUE,
+#     overridable via STATUSLINE_CONFIG_FILE) is parsed at startup and used
+#     to seed any of the 17 recognized settings that aren't already set as
+#     an env var -- env vars always win. Parsed line-by-line into an
+#     allowlist (never `source`d, so a malformed/tampered file can't run
+#     arbitrary shell), costs zero subprocess forks. Written by the new
+#     sibling configure.sh CLI/TUI (see repo root), which lets a user
+#     persist their preferences interactively instead of exporting env vars
+#     in their shell profile every session.
+#   - Added 11 new STATUSLINE_SHOW_*=1/0 toggles (default 1/shown) for
+#     finer-grained control over which segments render, on top of the
+#     existing STATUSLINE_HIDE_COST blanket switch: STATUSLINE_SHOW_GIT,
+#     STATUSLINE_SHOW_GIT_STATUS (dirty/ahead-behind only, branch name
+#     still controlled by SHOW_GIT), STATUSLINE_SHOW_CC_VERSION,
+#     STATUSLINE_SHOW_OUTPUT_STYLE, STATUSLINE_SHOW_MEM, STATUSLINE_SHOW_SESSION,
+#     STATUSLINE_SHOW_CACHE, STATUSLINE_SHOW_SPEED, STATUSLINE_SHOW_TODAY,
+#     STATUSLINE_SHOW_WEEK, STATUSLINE_SHOW_MONTH.
+#   - Disabling a segment also skips the subprocess(es) that computed it,
+#     consistent with this script's existing subprocess-minimization
+#     principle: SHOW_GIT=0 skips the git plumbing entirely, SHOW_MEM=0
+#     skips get_mem_usage() (as does compact mode, which never renders Mem
+#     regardless), and update_cache_background() now skips the
+#     `ccusage daily/weekly/monthly` calls individually when their matching
+#     SHOW_TODAY/WEEK/MONTH is 0 (and skips the background update entirely
+#     when none of Session/Cache/Speed/Today/Week/Month are enabled).
+#     `ccusage blocks` itself always still runs when the background update
+#     runs at all, since its result also gates whether daily/weekly/monthly
+#     get persisted to the cache file.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
+
+# ---- user config file (per-user customization via configure.sh) ----
+# ~/.claude/statusline.conf holds KEY=VALUE persisted settings written by the
+# sibling configure.sh CLI/TUI, so users don't have to export env vars in
+# their shell profile every session. Deliberately NOT `source`d (that would
+# eval arbitrary shell) -- parsed line-by-line and only assigned into an
+# allowlisted set of known keys via printf -v, same "validate before use"
+# posture as every other external-input path in this script. An env var that
+# is already set always wins over the config file (${!key+x} tests presence,
+# not truthiness, so an explicitly empty env var still counts as "set").
+STATUSLINE_CONFIG_FILE="${STATUSLINE_CONFIG_FILE:-$HOME/.claude/statusline.conf}"
+if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
+  while IFS='=' read -r _cfg_key _cfg_val; do
+    [ -z "$_cfg_key" ] && continue
+    case "$_cfg_key" in
+      \#*) continue ;;
+      NO_COLOR|STATUSLINE_UNICODE|STATUSLINE_HIDE_COST|STATUSLINE_COMPACT|STATUSLINE_COMPACT_WIDTH|STATUSLINE_MAX_CONTEXT|\
+      STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
+      STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH)
+        [ -n "${!_cfg_key+x}" ] && continue
+        printf -v "$_cfg_key" '%s' "$_cfg_val"
+        ;;
+      *) continue ;;
+    esac
+  done < "$STATUSLINE_CONFIG_FILE"
+fi
+unset _cfg_key _cfg_val
 
 # ---- pre-computed color variables (no subshell forks) ----
 if [ -z "$NO_COLOR" ]; then
@@ -412,6 +483,13 @@ fi
 
 update_cache_background() {
   [ -z "$_ccusage_cmd" ] && return
+  # Nothing that reads this cache is enabled -- skip the whole background
+  # fetch instead of spending 4 ccusage subprocesses on unused data.
+  if [ "${STATUSLINE_SHOW_SESSION:-1}" = "0" ] && [ "${STATUSLINE_SHOW_CACHE:-1}" = "0" ] \
+     && [ "${STATUSLINE_SHOW_SPEED:-1}" = "0" ] && [ "${STATUSLINE_SHOW_TODAY:-1}" = "0" ] \
+     && [ "${STATUSLINE_SHOW_WEEK:-1}" = "0" ] && [ "${STATUSLINE_SHOW_MONTH:-1}" = "0" ]; then
+    return
+  fi
   (
     # Exclusive lock: skip silently if another update is in progress
     mkdir "$LOCK_DIR" 2>/dev/null || exit 0
@@ -427,14 +505,30 @@ update_cache_background() {
     local _to=""
     [ -n "$_timeout_bin" ] && _to="$_timeout_bin 30"
 
+    # blocks feeds Session/Cache/Speed *and* gates the whole cache write
+    # below (daily/weekly/monthly are only persisted alongside a successful
+    # blocks fetch), so it always runs whenever this function didn't return
+    # early above. daily/weekly/monthly are each independently skippable.
     # shellcheck disable=SC2086 # $_to/$_ccusage_cmd hold multi-word commands; intentionally unquoted
     $_to $_ccusage_cmd blocks --json  >"$tmpdir/blocks"  2>/dev/null &
-    # shellcheck disable=SC2086
-    $_to $_ccusage_cmd daily  --json --since "$today_date" >"$tmpdir/daily"  2>/dev/null &
-    # shellcheck disable=SC2086
-    $_to $_ccusage_cmd weekly --json >"$tmpdir/weekly"  2>/dev/null &
-    # shellcheck disable=SC2086
-    $_to $_ccusage_cmd monthly --json >"$tmpdir/monthly" 2>/dev/null &
+    if [ "${STATUSLINE_SHOW_TODAY:-1}" != "0" ]; then
+      # shellcheck disable=SC2086
+      $_to $_ccusage_cmd daily  --json --since "$today_date" >"$tmpdir/daily"  2>/dev/null &
+    else
+      : >"$tmpdir/daily"
+    fi
+    if [ "${STATUSLINE_SHOW_WEEK:-1}" != "0" ]; then
+      # shellcheck disable=SC2086
+      $_to $_ccusage_cmd weekly --json >"$tmpdir/weekly"  2>/dev/null &
+    else
+      : >"$tmpdir/weekly"
+    fi
+    if [ "${STATUSLINE_SHOW_MONTH:-1}" != "0" ]; then
+      # shellcheck disable=SC2086
+      $_to $_ccusage_cmd monthly --json >"$tmpdir/monthly" 2>/dev/null &
+    else
+      : >"$tmpdir/monthly"
+    fi
     wait
 
     local blocks daily weekly monthly
@@ -536,18 +630,27 @@ _gather_git_info() {
 export -f _gather_git_info
 
 git_branch=""
-IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead < <(with_timeout 2 bash -c _gather_git_info)
-if [ -n "$_gb" ]; then
-  git_branch="$_gb"
-  [ -n "$_gdirty" ] && git_branch="${git_branch}*"
-  git_ahead_behind=""
-  [[ "$git_ahead" =~ ^[0-9]+$ ]] && [ "$git_ahead" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↑${git_ahead}"
-  [[ "$git_behind" =~ ^[0-9]+$ ]] && [ "$git_behind" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↓${git_behind}"
-  [ -n "$git_ahead_behind" ] && git_branch="${git_branch} ${git_ahead_behind}"
+if [ "${STATUSLINE_SHOW_GIT:-1}" != "0" ]; then
+  IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead < <(with_timeout 2 bash -c _gather_git_info)
+  if [ -n "$_gb" ]; then
+    git_branch="$_gb"
+    if [ "${STATUSLINE_SHOW_GIT_STATUS:-1}" != "0" ]; then
+      [ -n "$_gdirty" ] && git_branch="${git_branch}*"
+      git_ahead_behind=""
+      [[ "$git_ahead" =~ ^[0-9]+$ ]] && [ "$git_ahead" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↑${git_ahead}"
+      [[ "$git_behind" =~ ^[0-9]+$ ]] && [ "$git_behind" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↓${git_behind}"
+      [ -n "$git_ahead_behind" ] && git_branch="${git_branch} ${git_ahead_behind}"
+    fi
+  fi
 fi
 
 # ---- memory usage ----
-mem_pct=$(get_mem_usage)
+# Compact layout never renders Mem, so skip the vm_stat/proc-meminfo call
+# there too, not just when STATUSLINE_SHOW_MEM=0 disables it explicitly.
+mem_pct=""
+if [ "$_compact" -eq 0 ] && [ "${STATUSLINE_SHOW_MEM:-1}" != "0" ]; then
+  mem_pct=$(get_mem_usage)
+fi
 
 # ---- context window calculation ----
 context_pct=""
@@ -783,7 +886,7 @@ if [ "$_compact" -eq 1 ]; then
 
   # Line 3: 💰 Sess <cost> <time>  │  Today <cost>
   sess_part=""
-  if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
+  if [ "${STATUSLINE_SHOW_SESSION:-1}" != "0" ] && [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
     _sess_cost=""
     if [ -z "$STATUSLINE_HIDE_COST" ]; then
       if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
@@ -802,7 +905,8 @@ if [ "$_compact" -eq 1 ]; then
   fi
 
   today_part=""
-  if [ -z "$STATUSLINE_HIDE_COST" ] && [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
+  if [ -z "$STATUSLINE_HIDE_COST" ] && [ "${STATUSLINE_SHOW_TODAY:-1}" != "0" ] \
+     && [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
     today_cost_formatted=$(round_money "$today_cost")
     today_part="${_today}Today \$${today_cost_formatted}${_rst}"
   fi
@@ -826,10 +930,10 @@ else
   fi
   printf '  %s│%s' "$_sep" "$_rst"
   printf ' %s%s%s' "$_model" "$model_name" "$_rst"
-  if [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
+  if [ "${STATUSLINE_SHOW_CC_VERSION:-1}" != "0" ] && [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
     printf '  %sv%s%s' "$_ccver" "$cc_version" "$_rst"
   fi
-  if [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
+  if [ "${STATUSLINE_SHOW_OUTPUT_STYLE:-1}" != "0" ] && [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
     printf '  %s%s%s' "$_style" "$output_style" "$_rst"
   fi
   if [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
@@ -856,7 +960,7 @@ else
   fi
 
   sess_part=""
-  if [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
+  if [ "${STATUSLINE_SHOW_SESSION:-1}" != "0" ] && [ -n "$tot_tokens" ] && [[ "$tot_tokens" =~ ^[0-9]+$ ]]; then
     tot_formatted=$(format_tokens "$tot_tokens")
     # Session cost: prefer stdin cost.total_cost_usd (real-time), fallback to ccusage blocks cost_usd
     _sess_cost=""
@@ -877,10 +981,10 @@ else
   fi
 
   meta_part=""
-  if [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
+  if [ "${STATUSLINE_SHOW_CACHE:-1}" != "0" ] && [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
     meta_part="🗄 ${_cache}${cache_hit_rate}%${_rst}"
   fi
-  if [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
+  if [ "${STATUSLINE_SHOW_SPEED:-1}" != "0" ] && [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
     # Round via round_half_up_int() rather than `printf '%.0f'` -- see
     # round_money() above for why printf's %f conversion is locale-unsafe here.
     tpm_int=$(round_half_up_int "$tpm")
@@ -904,7 +1008,7 @@ else
   # Line 3: 💰 Today ... │ Week ... │ Month ...
   line3=""
   if [ -z "$STATUSLINE_HIDE_COST" ]; then
-    if [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
+    if [ "${STATUSLINE_SHOW_TODAY:-1}" != "0" ] && [ -n "$today_tokens" ] && [[ "$today_tokens" =~ ^[0-9]+$ ]]; then
       today_tokens_formatted=$(format_tokens "$today_tokens")
       if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
         today_cost_formatted=$(round_money "$today_cost")
@@ -914,7 +1018,7 @@ else
       fi
     fi
 
-    if [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
+    if [ "${STATUSLINE_SHOW_WEEK:-1}" != "0" ] && [ -n "$week_tokens" ] && [[ "$week_tokens" =~ ^[0-9]+$ ]]; then
       week_tokens_formatted=$(format_tokens "$week_tokens")
       if [ -n "$week_cost" ] && [[ "$week_cost" =~ ^[0-9.]+$ ]]; then
         week_cost_formatted=$(round_money "$week_cost")
@@ -925,7 +1029,7 @@ else
       if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${week_part}"; else line3="${week_part}"; fi
     fi
 
-    if [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
+    if [ "${STATUSLINE_SHOW_MONTH:-1}" != "0" ] && [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
       month_tokens_formatted=$(format_tokens "$month_tokens")
       if [ -n "$month_cost" ] && [[ "$month_cost" =~ ^[0-9.]+$ ]]; then
         month_cost_formatted=$(round_money "$month_cost")
