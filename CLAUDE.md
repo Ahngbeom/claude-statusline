@@ -13,7 +13,7 @@ Claude Code CLI용 3줄 컴팩트 statusline 스크립트. 세션 컨텍스트 �
 bats tests/
 
 # 린트 실행 (shellcheck 필요: brew install shellcheck)
-shellcheck statusline.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
+shellcheck statusline.sh configure.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
 
 # 로컬 수동 테스트 (mock stdin으로 statusline 실행)
 echo '{"workspace":{"current_dir":"/tmp/test"},"model":{"display_name":"Opus 4.6"},"session_id":"test-123","version":"1.0.44","output_style":{"name":"explanatory"}}' | bash statusline.sh
@@ -29,6 +29,10 @@ echo '{}' | STATUSLINE_UNICODE=1 bash statusline.sh
 
 # 실제 Claude Code에 연결해서 테스트 (statusline.sh를 ~/.claude/에 복사 후 재시작)
 cp statusline.sh ~/.claude/statusline.sh
+
+# 사용자별 설정 CLI/TUI 로컬 테스트 (별도 설정 파일로 격리)
+STATUSLINE_CONFIG_FILE=/tmp/statusline.conf ./configure.sh list
+STATUSLINE_CONFIG_FILE=/tmp/statusline.conf ./configure.sh set STATUSLINE_SHOW_WEEK 0
 ```
 
 ## Architecture
@@ -48,6 +52,7 @@ Claude Code CLI → stdin(세션 JSON) → statusline.sh → stdout(3줄 ANSI �
 | 세션 JSONL | `~/.claude/projects/-{encoded-dir}/{session-id}.jsonl` 마지막 20줄 | Line 2 (컨텍스트 토큰) | Fallback |
 | ccusage 캐시 | `~/.claude/stats-cache.json` (TTL 60초, 백그라운드 갱신) | Line 2 (세션), Line 3 (비용) | — |
 | Git | `git branch --show-current` | Line 1 (브랜치명) | — |
+| 사용자 설정 파일 | `~/.claude/statusline.conf` (`configure.sh`가 씀) | 전체 (표시 여부/색상/compact 등 17개 설정) | env var보다 후순위 |
 
 `statusline.sh`는 stdout 3줄 외에 side-channel 출력도 하나 만든다: stdin의 `rate_limits`(있으면)를
 그대로 `~/.claude/rate-limits-cache.json`에 써서 남긴다. 이 스크립트 자신은 이 값을 렌더링에 쓰지
@@ -103,12 +108,38 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 반영이 필요하면 `~/.claude/settings.json`의 `statusLine.refreshInterval`(초 단위)을 안내할 것(README
 "Compact Mode" 참고).
 
+### 사용자 설정 파일 (`~/.claude/statusline.conf`)
+
+`configure.sh`(저장소 루트, `statusline.sh`와 나란히 설치됨)로 사용자가 대화형 메뉴 또는
+`configure.sh set/get/unset/list/reset/path` CLI로 자신의 표시 설정을 영구 저장할 수 있다.
+`statusline.sh`는 시작 시(`STATUSLINE_CONFIG_FILE` 환경변수로 경로 오버라이드 가능, 기본
+`~/.claude/statusline.conf`) 이 파일을 `KEY=VALUE` 줄 단위로 파싱해 읽는다 — `source`하지 않고
+17개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
+있으면 그 키는 건너뛴다** (env var가 항상 config 파일보다 우선). 서브프로세스를 하나도 만들지
+않는다 (순수 bash while-read).
+
+17개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
+- **presence**: `NO_COLOR`/`STATUSLINE_UNICODE`/`STATUSLINE_HIDE_COST` — `statusline.sh`가 `-z`/`-n`으로
+  검사하므로 "켬"은 `KEY=1`을 쓰고 "끔"은 **키 자체를 삭제**해야 한다 (`KEY=0`을 쓰면 `-z`가
+  거짓이 되어 오히려 "켬"으로 해석됨 — `configure.sh`가 이 변환을 대신 처리)
+- **tristate**: `STATUSLINE_COMPACT` — `1`/`0`/키 삭제(`$COLUMNS` 자동 감지로 복귀) 3가지
+- **numeric**: `STATUSLINE_COMPACT_WIDTH`, `STATUSLINE_MAX_CONTEXT`
+- **bool**: 신규 `STATUSLINE_SHOW_*` 11개 — 값 기반, 기본값 `1`(표시), `0`이면 숨김
+
+`STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`은 렌더링만 숨기는 게 아니라 각각 git 정보 수집
+(`_gather_git_info`)과 `get_mem_usage()` 호출 자체를 건너뛰어 서브프로세스를 아낀다 (compact 모드는
+Mem을 원래 렌더링하지 않으므로 `_compact` 여부와 무관하게 항상 스킵). `update_cache_background()`도
+`STATUSLINE_SHOW_TODAY`/`WEEK`/`MONTH`가 각각 `0`이면 대응 `ccusage daily/weekly/monthly` 호출을
+개별적으로 생략한다 — 단 `ccusage blocks`는 캐시 파일 전체 쓰기를 게이트하는 역할도 겸하므로,
+Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항상 실행된다.
+
 ### statusline.sh 내부 구조
 
 섹션 마커(`# ---- name ----`)로 구분. `grep -n '# ----' statusline.sh`로 경계 확인:
 
 | 영역 | 마커 | 역할 |
 |------|------|------|
+| 설정 파일 로더 | `# ---- user config file` | `~/.claude/statusline.conf`를 allowlist 기반으로 파싱, env var 우선 |
 | 색상 변수 | `# ---- pre-computed color variables` | `NO_COLOR` 대응, 서브셸 없이 ANSI 코드 사전 계산 |
 | progress bar 문자 | `# ---- progress bar characters` | `STATUSLINE_UNICODE` 여부로 `▰▱` 또는 `=-` 선택 |
 | compact mode 감지 | `# ---- compact mode detection` | `$COLUMNS`/`STATUSLINE_COMPACT`/`STATUSLINE_COMPACT_WIDTH`로 `is_compact_mode()` 판정, `_compact` 변수에 저장 |
@@ -122,13 +153,14 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 
 ### 파일 역할
 
-- **statusline.sh**: 메인 스크립트. `~/.claude/settings.json`에 `"statusline": "~/.claude/statusline.sh"` 형태로 등록. stdout 렌더링과 별개로, stdin에 `rate_limits`가 있으면 `~/.claude/rate-limits-cache.json`에도 그대로 옮겨 쓴다(cc-menutor 등 외부 도구용 side-channel)
-- **install.sh**: 원라이너 설치 (`curl | bash`). 의존성 확인 → GitHub에서 다운로드 → settings.json에 statusline 필드 추가. 기존 settings.json이 있으면 `.backup` 생성
-- **uninstall.sh**: `~/.claude/statusline.sh`, `~/.claude/stats-cache.json`, `~/.claude/rate-limits-cache.json` 삭제, settings.json에서 statusline 필드 제거
-- **scripts/postinstall.sh**: npm `postinstall` 훅. `npm install`로 패키지 설치 시 install.sh와 동일한 역할 수행 (statusline.sh 복사 + settings.json 등록)
+- **statusline.sh**: 메인 스크립트. `~/.claude/settings.json`에 `"statusline": "~/.claude/statusline.sh"` 형태로 등록. stdout 렌더링과 별개로, stdin에 `rate_limits`가 있으면 `~/.claude/rate-limits-cache.json`에도 그대로 옮겨 쓴다(cc-menutor 등 외부 도구용 side-channel). 시작 시 `~/.claude/statusline.conf`(사용자 설정 파일, 아래 참고)도 읽는다
+- **configure.sh**: `statusline.sh`와 나란히 설치되는 독립 CLI/TUI. `~/.claude/statusline.conf`를 읽고 쓴다 (`list`/`get`/`set`/`unset`/`reset`/`path`/`preview` 서브커맨드, 인자 없이 실행하면 대화형 메뉴). 외부 의존성 없는 순수 bash
+- **install.sh**: 원라이너 설치 (`curl | bash`). 의존성 확인 → GitHub에서 statusline.sh + configure.sh 다운로드 → settings.json에 statusline 필드 추가. 기존 settings.json이 있으면 `.backup` 생성
+- **uninstall.sh**: `~/.claude/statusline.sh`, `~/.claude/configure.sh`, `~/.claude/stats-cache.json`, `~/.claude/rate-limits-cache.json`, `~/.claude/statusline.conf` 삭제, settings.json에서 statusline 필드 제거
+- **scripts/postinstall.sh**: npm `postinstall` 훅. `npm install`로 패키지 설치 시 install.sh와 동일한 역할 수행 (statusline.sh + configure.sh 복사 + settings.json 등록)
 - **scripts/preuninstall.sh**: npm `preuninstall` 훅. `npm uninstall`로 패키지 제거 시 uninstall.sh와 동일한 역할 수행
 
-> ⚠️ **install.sh/uninstall.sh ↔ scripts/postinstall.sh/preuninstall.sh 쌍은 각자 독립 구현이라 함께 수정해야 한다.** curl 원라이너(`install.sh`)는 `check_deps()`에서 jq 부재 시 즉시 종료하지만, npm 훅(`scripts/postinstall.sh`)은 `npm install` 자체를 실패시키지 않기 위해 jq 부재 시 경고만 출력하고 계속 진행한다 — 이 차이는 의도된 것이므로 "동기화"한답시고 없애지 말 것. 두 파일이 완전히 공유 코드를 쓰지 않는 이유는 `install.sh`가 curl로 단일 파일만 받아 실행되는 구조라 별도 lib 파일을 참조할 수 없기 때문(YAGNI로 통합 보류). settings.json 갱신/삭제 로직(jq 커맨드 자체)을 바꿀 때는 4개 파일 모두 확인할 것.
+> ⚠️ **install.sh/uninstall.sh ↔ scripts/postinstall.sh/preuninstall.sh 쌍은 각자 독립 구현이라 함께 수정해야 한다.** curl 원라이너(`install.sh`)는 `check_deps()`에서 jq 부재 시 즉시 종료하지만, npm 훅(`scripts/postinstall.sh`)은 `npm install` 자체를 실패시키지 않기 위해 jq 부재 시 경고만 출력하고 계속 진행한다 — 이 차이는 의도된 것이므로 "동기화"한답시고 없애지 말 것. 두 파일이 완전히 공유 코드를 쓰지 않는 이유는 `install.sh`가 curl로 단일 파일만 받아 실행되는 구조라 별도 lib 파일을 참조할 수 없기 때문(YAGNI로 통합 보류). settings.json 갱신/삭제 로직(jq 커맨드 자체)을 바꿀 때는 4개 파일 모두 확인할 것. `configure.sh` 배포(다운로드/복사/삭제) 역시 이 4개 파일 모두에 대칭적으로 들어가 있어야 한다.
 
 - **.github/workflows/publish.yml**: GitHub Release 발행 시 자동 실행. `verify`(버전 3곳 일치) 잡 이후 `publish-github-packages` 잡이 실행되어 GitHub Packages에 발행한다. npmjs.com 발행(`publish-npmjs` 잡)은 `NPM_TOKEN` 만료로 v1.3.0/v1.3.1/v1.3.3/v1.3.4/v1.5.0에서 반복적으로 실패해 v1.5.0에서 제거함 — GitHub Packages 단일 발행 구조로 전환
 - **.github/workflows/ci.yml**: push/PR마다 실행. `shellcheck` 린트 + `tests/`의 `bats` 테스트
@@ -141,6 +173,7 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 - ccusage cache miss 시 동기 npx 호출 제거, 백그라운드 전용
 - `context_window` stdin 필드 사용 시 JSONL 파일 I/O 완전 제거 (v1.3.0)
 - 사용되지 않던 `session_txt`/`fmt_time_hm()` 제거로 세션 렌더링 시 불필요한 `date` 서브프로세스 포크 제거 (v1.3.4)
+- `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0` 설정 시 git 수집/`get_mem_usage()` 호출 자체를 스킵, `STATUSLINE_SHOW_TODAY`/`WEEK`/`MONTH=0` 설정 시 `update_cache_background()`의 대응 `ccusage` 백그라운드 호출을 개별 스킵 (v1.8.0)
 
 ## Dependencies
 
@@ -159,6 +192,8 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 - `STATUSLINE_HIDE_COST=1` 환경변수로 세션 비용(Line 2)과 Line 3 전체 숨김
 - `STATUSLINE_COMPACT=1`/`=0` 환경변수로 축약 레이아웃 강제 on/off (미설정 시 `$COLUMNS` 자동 감지)
 - `STATUSLINE_COMPACT_WIDTH=<cols>` 환경변수로 자동 축약 전환 기준 폭 오버라이드 (기본값 80)
+- `STATUSLINE_SHOW_*=1/0` 11개 환경변수(GIT/GIT_STATUS/CC_VERSION/OUTPUT_STYLE/MEM/SESSION/CACHE/SPEED/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
+- 위 모든 env var는 `~/.claude/statusline.conf`(`configure.sh`가 관리)로도 설정 가능하며, 이미 설정된 env var가 항상 config 파일 값보다 우선함
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
 - Git 브랜치명은 dirty(`*`)/ahead-behind(`↑N↓N`) 표시를 포함하며, upstream 미설정 시 ahead/behind는 조용히 생략됨 (graceful degradation과 동일한 원칙)
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
