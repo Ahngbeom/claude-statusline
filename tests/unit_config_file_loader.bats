@@ -56,3 +56,22 @@ JSON_WITH_VERSION='{"workspace":{"current_dir":"/tmp/proj/myapp"},"model":{"disp
   line1="$(sed -n '1p' <<<"$output")"
   [[ "$line1" == *"Mem"* ]]
 }
+
+@test "config file: a STATUSLINE_COLOR_* key is applied via the prefix-glob allowlist arm" {
+  run run_statusline_colored_with_config "$JSON" "STATUSLINE_COLOR_DIR=196"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'\033[38;5;196m'* ]]
+}
+
+@test "config file: a STATUSLINE_ICON_* key is applied via the prefix-glob allowlist arm" {
+  run run_statusline_with_config "$JSON" "STATUSLINE_ICON_DIR=🚀"
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == 🚀* ]]
+}
+
+@test "config file: STATUSLINE_SEP_CHAR is applied via the allowlist" {
+  run run_statusline_with_config "$JSON" "STATUSLINE_SEP_CHAR=::"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"::"* ]]
+}

@@ -133,3 +133,72 @@ configure_sh() {
   run configure_sh bogus-subcommand
   [ "$status" -ne 0 ]
 }
+
+@test "configure: set on a color256 key persists an in-range value" {
+  run configure_sh set STATUSLINE_COLOR_DIR 196
+  [ "$status" -eq 0 ]
+  run configure_sh get STATUSLINE_COLOR_DIR
+  [ "$output" = "196" ]
+}
+
+@test "configure: set on a color256 key rejects a value above 255" {
+  run configure_sh set STATUSLINE_COLOR_DIR 256
+  [ "$status" -ne 0 ]
+}
+
+@test "configure: set on a color256 key rejects a non-numeric value" {
+  run configure_sh set STATUSLINE_COLOR_DIR purple
+  [ "$status" -ne 0 ]
+}
+
+@test "configure: set on a percent key persists an in-range value" {
+  run configure_sh set STATUSLINE_THRESHOLD_MEM_WARN 50
+  [ "$status" -eq 0 ]
+  run configure_sh get STATUSLINE_THRESHOLD_MEM_WARN
+  [ "$output" = "50" ]
+}
+
+@test "configure: set on a percent key rejects a value above 100" {
+  run configure_sh set STATUSLINE_THRESHOLD_MEM_WARN 101
+  [ "$status" -ne 0 ]
+}
+
+@test "configure: set on a text key accepts and persists an emoji value" {
+  run configure_sh set STATUSLINE_ICON_DIR 🚀
+  [ "$status" -eq 0 ]
+  run configure_sh get STATUSLINE_ICON_DIR
+  [ "$output" = "🚀" ]
+}
+
+@test "configure: set on a text key accepts a multi-character separator string" {
+  run configure_sh set STATUSLINE_SEP_CHAR "::"
+  [ "$status" -eq 0 ]
+  run configure_sh get STATUSLINE_SEP_CHAR
+  [ "$output" = "::" ]
+}
+
+@test "configure: the 'default' keyword resets a color256 key instead of being validated as a value" {
+  configure_sh set STATUSLINE_COLOR_DIR 196
+  run configure_sh set STATUSLINE_COLOR_DIR default
+  [ "$status" -eq 0 ]
+  ! grep -q '^STATUSLINE_COLOR_DIR=' "$STATUSLINE_CONFIG_FILE"
+  run configure_sh get STATUSLINE_COLOR_DIR
+  [ "$output" = "117" ]
+}
+
+@test "configure: the 'reset' keyword resets a text key" {
+  configure_sh set STATUSLINE_ICON_DIR 🚀
+  run configure_sh set STATUSLINE_ICON_DIR reset
+  [ "$status" -eq 0 ]
+  run configure_sh get STATUSLINE_ICON_DIR
+  [ "$output" = "📂" ]
+}
+
+@test "configure: list shows the new color/icon/threshold keys" {
+  run configure_sh list
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"STATUSLINE_COLOR_DIR"* ]]
+  [[ "$output" == *"STATUSLINE_ICON_MEM"* ]]
+  [[ "$output" == *"STATUSLINE_THRESHOLD_SESSION_CRIT"* ]]
+  [[ "$output" == *"STATUSLINE_SEP_CHAR"* ]]
+}

@@ -67,6 +67,20 @@ seed_ccusage_cache() {
 EOF
 }
 
+# Like run_statusline, but does NOT force NO_COLOR=1 -- for tests that assert
+# on actual ANSI escape codes (STATUSLINE_COLOR_*/STATUSLINE_THRESHOLD_*
+# overrides). Callers can still pass NO_COLOR=1 explicitly via "$@" to check
+# the no-color interaction.
+run_statusline_colored() {
+  local json="$1"; shift
+  local tmp_home
+  tmp_home="$(mktemp -d)"
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" env "$@" bash "$STATUSLINE_SH" )
+  local status=$?
+  rm -rf "$tmp_home"
+  return "$status"
+}
+
 # Like run_statusline, but pre-seeds the isolated HOME with a synthetic
 # ccusage cache (see seed_ccusage_cache) so Session/Line 3 render.
 run_statusline_with_cache() {
@@ -75,6 +89,19 @@ run_statusline_with_cache() {
   tmp_home="$(mktemp -d)"
   seed_ccusage_cache "$tmp_home"
   ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
+  local status=$?
+  rm -rf "$tmp_home"
+  return "$status"
+}
+
+# Like run_statusline_with_cache, but does NOT force NO_COLOR=1 (see
+# run_statusline_colored) -- for Session-color-tier assertions.
+run_statusline_colored_with_cache() {
+  local json="$1"; shift
+  local tmp_home
+  tmp_home="$(mktemp -d)"
+  seed_ccusage_cache "$tmp_home"
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"
@@ -99,6 +126,19 @@ run_statusline_with_config() {
   tmp_home="$(mktemp -d)"
   seed_config_file "$tmp_home" "$config"
   ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
+  local status=$?
+  rm -rf "$tmp_home"
+  return "$status"
+}
+
+# Like run_statusline_with_config, but does NOT force NO_COLOR=1 (see
+# run_statusline_colored) -- for STATUSLINE_COLOR_* config-file assertions.
+run_statusline_colored_with_config() {
+  local json="$1" config="$2"; shift 2
+  local tmp_home
+  tmp_home="$(mktemp -d)"
+  seed_config_file "$tmp_home" "$config"
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"

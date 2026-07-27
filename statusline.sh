@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.8.0
+# Version: 1.10.1
 # License: MIT
 #
 # Features:
@@ -10,7 +10,8 @@
 #   Line 3: Daily │ Weekly │ Monthly usage and costs
 #   Compact mode: auto-shrinks the above on narrow terminals (see STATUSLINE_COMPACT below)
 #   Per-user customization: sibling configure.sh CLI/TUI persists settings to
-#   ~/.claude/statusline.conf (see "Changes (v1.8.0)" below)
+#   ~/.claude/statusline.conf, including per-element colors/icons/thresholds/
+#   separator (see "Changes (v1.9.0)" below)
 #
 # Requirements:
 #   - jq (required): JSON parsing
@@ -35,6 +36,16 @@
 #   STATUSLINE_SHOW_TODAY=1/0        Line 3 Today (default 1)
 #   STATUSLINE_SHOW_WEEK=1/0         Line 3 Week (default 1)
 #   STATUSLINE_SHOW_MONTH=1/0        Line 3 Month (default 1)
+#   STATUSLINE_SEP_CHAR=<str>        Separator character, all lines (default │)
+#   STATUSLINE_COLOR_DIR/_MODEL/_GIT/_CC_VERSION/_OUTPUT_STYLE/_SEP/_CACHE/
+#     _TODAY/_WEEK/_MONTH=<0-255>    Per-element 256-color code override
+#   STATUSLINE_COLOR_CTX_OK/_WARN/_CRIT=<0-255>       Context bar 3-tier colors
+#   STATUSLINE_COLOR_SESSION_OK/_WARN/_CRIT=<0-255>   Session 3-tier colors
+#   STATUSLINE_COLOR_MEM_OK/_WARN/_CRIT=<0-255>       Mem indicator 3-tier colors
+#   STATUSLINE_ICON_DIR/_CONTEXT/_COST/_CACHE/_MEM=<str> Per-element icon override
+#   STATUSLINE_THRESHOLD_CTX_WARN/_CRIT=<0-100>       Context remaining % cutoffs (default 40/20)
+#   STATUSLINE_THRESHOLD_MEM_WARN/_CRIT=<0-100>       Memory used % cutoffs (default 60/80)
+#   STATUSLINE_THRESHOLD_SESSION_WARN/_CRIT=<0-100>   Session remaining % cutoffs (default 25/10)
 #
 # Performance notes (v1.1.0):
 #   - All color codes are pre-computed variables (no subshell forks)
@@ -177,6 +188,115 @@
 #     runs at all, since its result also gates whether daily/weekly/monthly
 #     get persisted to the cache file.
 
+# Changes (v1.9.0):
+#   - Per-element color customization: 19 new STATUSLINE_COLOR_*=<0-255>
+#     settings (see "Environment variables" above) override the raw
+#     xterm-256 code used for each rendered element, including the 3-tier
+#     colors for the context bar, Session segment, and Mem indicator.
+#     Resolved once at startup via a new _resolve_color() helper (plain
+#     printf -v, zero subprocess forks even across 19 calls); an
+#     out-of-range or non-numeric override silently falls back to the
+#     existing hardcoded default, same graceful-degradation contract as
+#     everywhere else in this script. NO_COLOR=1 still disables all color
+#     output regardless of any STATUSLINE_COLOR_* override.
+#   - Per-element icon customization: 5 new STATUSLINE_ICON_*=<str> settings
+#     replace the 📂/🧠/💰/🗄/💻 prefixes.
+#   - Color-threshold customization: 6 new STATUSLINE_THRESHOLD_*=<0-100>
+#     settings override the cutoffs that pick which 3-tier color renders
+#     (context remaining %, memory used %, session remaining %) -- previously
+#     hardcoded 20/40, 60/80, 10/25.
+#   - Separator customization: STATUSLINE_SEP_CHAR=<str> replaces the │
+#     character used between segments on every line (default unchanged).
+#   - All 31 new settings are persistable via the sibling configure.sh
+#     CLI/TUI (three new value types: color256, text, percent) and via
+#     ~/.claude/statusline.conf, matched by STATUSLINE_COLOR_*/
+#     STATUSLINE_ICON_*/STATUSLINE_THRESHOLD_*/STATUSLINE_SEP_CHAR
+#     prefix-glob case arms in the config-file allowlist rather than
+#     enumerating all 31 keys -- printf -v still only ever assigns into a
+#     valid bash identifier, so this doesn't change the "never eval/source
+#     the config file" safety property.
+#   - Removed _version/_usage/_cost/_burn color variables: dead code left
+#     over from an earlier design, confirmed unused by every rendering path
+#     (same cleanup principle as v1.3.5's session_txt/fmt_time_hm() removal).
+
+# Changes (v1.9.1):
+#   - configure.sh's interactive menu (run with no arguments) now redraws
+#     with an always-current "Live Preview" panel on top -- statusline.sh
+#     rendered with your current settings -- both on every screen and again
+#     immediately after any value you change, instead of requiring a
+#     separate "Preview statusline" menu action to see the effect. No
+#     statusline.sh behavior changes; this is a configure.sh-only UX change,
+#     logged here since the project keeps a single changelog rather than a
+#     separate CHANGELOG.md (see CLAUDE.md "Versioning & Release").
+#   - The screen-clear between redraws only fires when stdout is a real
+#     terminal ([ -t 1 ]) -- piped/redirected output (including scripting
+#     and test harnesses) never sees the escape sequence.
+#   - Fixed a latent infinite-loop bug in configure.sh's menu: hitting EOF
+#     (Ctrl-D, or stdin running out) at the "> " prompt left the loop
+#     spinning forever re-reading an already-closed stdin instead of
+#     exiting, since the read failure's empty result fell through to the
+#     "unknown choice" branch rather than being treated as exit.
+
+# Changes (v1.10.0):
+#   - configure.sh's interactive entry point (run with no arguments) now
+#     opens a full arrow-key TUI when stdout/stdin are a real terminal: a
+#     single scrollable list of every setting (headers per category, cursor
+#     skips them) navigated with Up/Down/PgUp/PgDn, Enter/Space to
+#     toggle/edit, Left/Right to nudge color256/percent values by 1, r/R to
+#     reset one field/everything, q/Esc to quit. The "Live Preview" panel
+#     from v1.9.1 is now pinned at a fixed position at the top of the screen
+#     (alternate screen buffer) instead of scrolling away as prompts
+#     accumulate below it -- addresses user-reported feedback that the v1.9.1
+#     panel was hard to keep track of once you changed more than one setting
+#     in a category, and that there was no way to navigate without typing
+#     numbers.
+#   - Piped/non-interactive stdin (scripts, CI, the bats test suite) and the
+#     explicit `configure.sh menu` subcommand both still get the v1.9.1
+#     numbered-menu flow unchanged -- same graceful-degradation contract as
+#     NO_COLOR/STATUSLINE_COMPACT elsewhere in this project. Raw terminal
+#     mode is only ever entered when there's a real pty to use it on.
+#   - Pure navigation (Up/Down/PgUp/PgDn) never re-invokes statusline.sh --
+#     only a committed value change does, and the full-frame redraw reuses
+#     the last rendered preview text otherwise. Arrow-key repeats don't spawn
+#     a fresh jq/git/ccusage-cache-read subprocess chain per keypress.
+#   - Ctrl-C/SIGTERM during the TUI are caught by a trap that restores the
+#     terminal (cooked mode, cursor visible, alternate screen buffer exited)
+#     before the process exits, so an abrupt exit can't leave the terminal
+#     in a broken state. Verified against a real pty (via `script`), not
+#     just unit-testable pieces -- see the implementation notes for what was
+#     and wasn't covered by the automated test suite.
+#   - No new external dependency: terminal control is raw ANSI/CSI escape
+#     sequences (same convention as statusline.sh's own hand-written color
+#     codes) plus `stty`, not `tput`/`dialog`/`whiptail`/`fzf`.
+
+# Changes (v1.10.1):
+#   - Fixed severe flicker/stutter in configure.sh's v1.10.0 full TUI,
+#     reported after real-world use. Two causes, both fixed:
+#     1. Every redraw did a full-screen clear (`\033[2J`) followed by ~20
+#        separate printf/echo calls -- each its own write(2) -- leaving a
+#        visible blank-flash-then-partial-repaint on every keypress. Now a
+#        single frame string is built via pure concatenation and written
+#        with exactly one `printf` call; `\033[H` (home, no clear) plus a
+#        per-line `\033[K` (clear-to-end-of-line) and a trailing `\033[J`
+#        (clear-to-end-of-screen) replace the full clear.
+#     2. Every redraw re-resolved every visible row's value/description via
+#        _effective_value()/_key_description() (each a subshell fork) even
+#        on pure cursor movement -- with a ~12-row viewport that's up to
+#        ~36 forks per single arrow-key press. A new _tui_row_text[] cache
+#        (see _tui_refresh_row()/_tui_refresh_all_rows()) now holds each
+#        row's rendered text, recomputed only when that row's underlying
+#        value actually changes, not on every render -- pure navigation is
+#        now fork-free for row rendering. Confirmed by direct testing that
+#        bash 3.2 (macOS stock bash) rejects `printf -v "arr[$idx]"`
+#        (array-subscript target) -- plain `arr[$idx]=value` assignment
+#        works fine and is used instead.
+#   - The config file path shown in the TUI header is now resolved once at
+#     startup instead of forked via $(_config_file) on every redraw.
+#   - No behavior change to what's displayed or how editing works -- purely
+#     a rendering/performance fix, re-verified against a real pty (Ctrl-C
+#     recovery, value-change/preview-refresh correctness, no `\033[2J` in
+#     the output stream).
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -202,6 +322,15 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
+      # Prefix-glob match instead of enumerating every key (there are 31): still
+      # printf -v'd (never eval/source), and printf -v itself rejects anything
+      # that isn't a valid bash identifier, so this doesn't widen the "no
+      # arbitrary code execution" guarantee above -- it only widens which KEY
+      # NAMES are accepted, not how the VALUE is used.
+      STATUSLINE_COLOR_*|STATUSLINE_ICON_*|STATUSLINE_THRESHOLD_*|STATUSLINE_SEP_CHAR)
+        [ -n "${!_cfg_key+x}" ] && continue
+        printf -v "$_cfg_key" '%s' "$_cfg_val"
+        ;;
       *) continue ;;
     esac
   done < "$STATUSLINE_CONFIG_FILE"
@@ -209,32 +338,78 @@ fi
 unset _cfg_key _cfg_val
 
 # ---- pre-computed color variables (no subshell forks) ----
+# _resolve_color: sets $REPLY to OVERRIDE (a STATUSLINE_COLOR_* value, 0-255)
+# if it's a valid 256-color code, else DEFAULT (same "REPLY" convention as
+# bash's own `read` builtin). No command substitution, so this costs zero
+# subprocess forks even called 19x below -- same "validate before use"
+# posture as the config-file loader above. REPLY is assigned unconditionally
+# every call, immediately consumed by the caller, never read stale.
+_resolve_color() {
+  local __override="$1" __default="$2"
+  if [[ "$__override" =~ ^[0-9]{1,3}$ ]] && [ "$__override" -le 255 ]; then
+    REPLY="$__override"
+  else
+    REPLY="$__default"
+  fi
+}
+
 if [ -z "$NO_COLOR" ]; then
-  _dir=$'\033[38;5;117m'      # sky blue
-  _model=$'\033[38;5;147m'    # light purple
-  _version=$'\033[38;5;180m'  # soft yellow
-  _ccver=$'\033[38;5;249m'    # light gray
-  _style=$'\033[38;5;245m'    # gray
-  _git=$'\033[38;5;150m'      # soft green
-  _usage=$'\033[38;5;189m'    # lavender
-  _cost=$'\033[38;5;222m'     # light gold
-  _burn=$'\033[38;5;220m'     # bright gold
-  _cache=$'\033[38;5;120m'    # light green
-  _today=$'\033[38;5;153m'    # light blue
-  _week=$'\033[38;5;183m'     # light pink
-  _month=$'\033[38;5;216m'    # light coral
+  _resolve_color "$STATUSLINE_COLOR_DIR" 117;                  _dir=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_MODEL" 147;                _model=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_GIT" 150;                  _git=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_CC_VERSION" 249;           _ccver=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_OUTPUT_STYLE" 245;         _style=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_SEP" 240;                  _sep=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_CACHE" 120;                _cache=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_TODAY" 153;                _today=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_WEEK" 183;                 _week=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_MONTH" 216;                _month=$'\033[38;5;'"${REPLY}m"
   _ctx=$'\033[1;37m'          # default white (context - updated dynamically)
-  _sep=$'\033[38;5;240m'      # dim gray separator
   _rst=$'\033[0m'
-  _mem_ok=$'\033[38;5;120m'   # green (< 60%)
-  _mem_warn=$'\033[38;5;220m' # yellow (≥ 60%)
-  _mem_crit=$'\033[38;5;196m' # red (≥ 80%)
+  # 3-tier color sets: the dynamic *_color()/inline blocks below pick one of
+  # these per render instead of a hardcoded escape sequence.
+  _resolve_color "$STATUSLINE_COLOR_CTX_OK" 158;               _ctx_ok=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_CTX_WARN" 215;             _ctx_warn=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_CTX_CRIT" 203;             _ctx_crit=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_SESSION_OK" 194;           _session_ok=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_SESSION_WARN" 228;         _session_warn=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_SESSION_CRIT" 210;         _session_crit=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_MEM_OK" 120;               _mem_ok=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_MEM_WARN" 220;             _mem_warn=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_MEM_CRIT" 196;             _mem_crit=$'\033[38;5;'"${REPLY}m"
 else
-  _dir="" _model="" _version="" _ccver="" _style="" _git=""
-  _usage="" _cost="" _burn="" _cache="" _today="" _week="" _month=""
+  _dir="" _model="" _ccver="" _style="" _git=""
+  _cache="" _today="" _week="" _month=""
   _ctx="" _sep="" _rst=""
+  _ctx_ok="" _ctx_warn="" _ctx_crit=""
+  _session_ok="" _session_warn="" _session_crit=""
   _mem_ok="" _mem_warn="" _mem_crit=""
 fi
+
+# ---- icon overrides (plain parameter expansion, zero forks) ----
+_icon_dir="${STATUSLINE_ICON_DIR:-📂}"
+_icon_ctx="${STATUSLINE_ICON_CONTEXT:-🧠}"
+_icon_cost="${STATUSLINE_ICON_COST:-💰}"
+_icon_cache="${STATUSLINE_ICON_CACHE:-🗄}"
+_icon_mem="${STATUSLINE_ICON_MEM:-💻}"
+
+# ---- separator character override ----
+_sep_char="${STATUSLINE_SEP_CHAR:-│}"
+
+# ---- color-threshold overrides (validated once, used by the dynamic color
+# blocks below instead of hardcoded 20/40/60/80/10/25) ----
+_th_ctx_warn="${STATUSLINE_THRESHOLD_CTX_WARN:-40}"
+[[ "$_th_ctx_warn" =~ ^[0-9]+$ ]] || _th_ctx_warn=40
+_th_ctx_crit="${STATUSLINE_THRESHOLD_CTX_CRIT:-20}"
+[[ "$_th_ctx_crit" =~ ^[0-9]+$ ]] || _th_ctx_crit=20
+_th_mem_warn="${STATUSLINE_THRESHOLD_MEM_WARN:-60}"
+[[ "$_th_mem_warn" =~ ^[0-9]+$ ]] || _th_mem_warn=60
+_th_mem_crit="${STATUSLINE_THRESHOLD_MEM_CRIT:-80}"
+[[ "$_th_mem_crit" =~ ^[0-9]+$ ]] || _th_mem_crit=80
+_th_session_warn="${STATUSLINE_THRESHOLD_SESSION_WARN:-25}"
+[[ "$_th_session_warn" =~ ^[0-9]+$ ]] || _th_session_warn=25
+_th_session_crit="${STATUSLINE_THRESHOLD_SESSION_CRIT:-10}"
+[[ "$_th_session_crit" =~ ^[0-9]+$ ]] || _th_session_crit=10
 
 # ---- progress bar characters (ASCII-safe default) ----
 if [ -n "$STATUSLINE_UNICODE" ]; then
@@ -672,12 +847,12 @@ get_max_context() {
 _set_context_color() {
   local remaining_pct="$1"
   [ -n "$NO_COLOR" ] && return
-  if [ "$remaining_pct" -le 20 ]; then
-    _ctx=$'\033[38;5;203m'    # coral red
-  elif [ "$remaining_pct" -le 40 ]; then
-    _ctx=$'\033[38;5;215m'    # peach
+  if [ "$remaining_pct" -le "$_th_ctx_crit" ]; then
+    _ctx="$_ctx_crit"    # coral red
+  elif [ "$remaining_pct" -le "$_th_ctx_warn" ]; then
+    _ctx="$_ctx_warn"    # peach
   else
-    _ctx=$'\033[38;5;158m'    # mint green
+    _ctx="$_ctx_ok"      # mint green
   fi
 }
 
@@ -849,9 +1024,9 @@ fi
 _session=""
 if [ -z "$NO_COLOR" ]; then
   rem_pct=$(( 100 - session_pct ))
-  if   (( rem_pct <= 10 )); then _session=$'\033[38;5;210m'   # light pink
-  elif (( rem_pct <= 25 )); then _session=$'\033[38;5;228m'   # light yellow
-  else                           _session=$'\033[38;5;194m'   # light green
+  if   (( rem_pct <= _th_session_crit )); then _session="$_session_crit"   # light pink
+  elif (( rem_pct <= _th_session_warn )); then _session="$_session_warn"   # light yellow
+  else                                         _session="$_session_ok"     # light green
   fi
 fi
 
@@ -865,11 +1040,11 @@ if [ "$_compact" -eq 1 ]; then
   # Line 3 collapses Session+Today/Week/Month/Cache/Speed down to
   # "Sess <cost> <time>  │  Today <cost>" -- token counts, the session bar,
   # Week/Month and cache/speed are all omitted.
-  printf '📂 %s%s%s' "$_dir" "${current_dir##*/}" "$_rst"
+  printf '%s %s%s%s' "$_icon_dir" "$_dir" "${current_dir##*/}" "$_rst"
   if [ -n "$git_branch" ]; then
     printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
   fi
-  printf '  %s│%s' "$_sep" "$_rst"
+  printf '  %s%s%s' "$_sep" "$_sep_char" "$_rst"
   printf ' %s%s%s' "$_model" "$model_name" "$_rst"
 
   # Line 2: 🧠 used/max bar pct%
@@ -878,9 +1053,9 @@ if [ "$_compact" -eq 1 ]; then
     context_bar=$(progress_bar "$context_remaining_pct" "$_ctx_bar_width")
     used_formatted=$(format_tokens "$context_used_tokens")
     max_formatted=$(format_tokens "$context_max_tokens")
-    ctx_part="🧠 ${_ctx}${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
+    ctx_part="${_icon_ctx} ${_ctx}${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
   else
-    ctx_part="🧠 ${_ctx}···${_rst}"
+    ctx_part="${_icon_ctx} ${_ctx}···${_rst}"
   fi
   line2="$ctx_part"
 
@@ -913,22 +1088,22 @@ if [ "$_compact" -eq 1 ]; then
 
   line3=""
   if [ -n "$sess_part" ]; then
-    line3="💰 ${sess_part}"
+    line3="${_icon_cost} ${sess_part}"
   fi
   if [ -n "$today_part" ]; then
     if [ -n "$line3" ]; then
-      line3="${line3}  ${_sep}│${_rst} ${today_part}"
+      line3="${line3}  ${_sep}${_sep_char}${_rst} ${today_part}"
     else
-      line3="💰 ${today_part}"
+      line3="${_icon_cost} ${today_part}"
     fi
   fi
 else
   # Line 1: 📂 dir  branch │ model  cc_ver  style
-  printf '📂 %s%s%s' "$_dir" "$current_dir" "$_rst"
+  printf '%s %s%s%s' "$_icon_dir" "$_dir" "$current_dir" "$_rst"
   if [ -n "$git_branch" ]; then
     printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
   fi
-  printf '  %s│%s' "$_sep" "$_rst"
+  printf '  %s%s%s' "$_sep" "$_sep_char" "$_rst"
   printf ' %s%s%s' "$_model" "$model_name" "$_rst"
   if [ "${STATUSLINE_SHOW_CC_VERSION:-1}" != "0" ] && [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
     printf '  %sv%s%s' "$_ccver" "$cc_version" "$_rst"
@@ -937,14 +1112,14 @@ else
     printf '  %s%s%s' "$_style" "$output_style" "$_rst"
   fi
   if [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
-    if [ "$mem_pct" -ge 80 ]; then
+    if [ "$mem_pct" -ge "$_th_mem_crit" ]; then
       _mem_color="$_mem_crit"
-    elif [ "$mem_pct" -ge 60 ]; then
+    elif [ "$mem_pct" -ge "$_th_mem_warn" ]; then
       _mem_color="$_mem_warn"
     else
       _mem_color="$_mem_ok"
     fi
-    printf '  %s│%s %s💻 Mem %d%%%s' "$_sep" "$_rst" "$_mem_color" "$mem_pct" "$_rst"
+    printf '  %s%s%s %s%s Mem %d%%%s' "$_sep" "$_sep_char" "$_rst" "$_mem_color" "$_icon_mem" "$mem_pct" "$_rst"
   fi
 
   # Line 2: 🧠 Context ... │ Session ... │ 🗄 cache  speed
@@ -954,9 +1129,9 @@ else
     context_bar=$(progress_bar "$context_remaining_pct" "$_ctx_bar_width")
     used_formatted=$(format_tokens "$context_used_tokens")
     max_formatted=$(format_tokens "$context_max_tokens")
-    ctx_part="🧠 ${_ctx}Context ${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
+    ctx_part="${_icon_ctx} ${_ctx}Context ${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
   else
-    ctx_part="🧠 ${_ctx}Context ···${_rst}"
+    ctx_part="${_icon_ctx} ${_ctx}Context ···${_rst}"
   fi
 
   sess_part=""
@@ -982,7 +1157,7 @@ else
 
   meta_part=""
   if [ "${STATUSLINE_SHOW_CACHE:-1}" != "0" ] && [ -n "$cache_hit_rate" ] && [[ "$cache_hit_rate" =~ ^[0-9]+$ ]]; then
-    meta_part="🗄 ${_cache}${cache_hit_rate}%${_rst}"
+    meta_part="${_icon_cache} ${_cache}${cache_hit_rate}%${_rst}"
   fi
   if [ "${STATUSLINE_SHOW_SPEED:-1}" != "0" ] && [ -n "$tpm" ] && [[ "$tpm" =~ ^[0-9.]+$ ]]; then
     # Round via round_half_up_int() rather than `printf '%.0f'` -- see
@@ -999,10 +1174,10 @@ else
   # Assemble line2
   line2="$ctx_part"
   if [ -n "$sess_part" ]; then
-    line2="${line2}  ${_sep}│${_rst} ${sess_part}"
+    line2="${line2}  ${_sep}${_sep_char}${_rst} ${sess_part}"
   fi
   if [ -n "$meta_part" ]; then
-    line2="${line2}  ${_sep}│${_rst} ${meta_part}"
+    line2="${line2}  ${_sep}${_sep_char}${_rst} ${meta_part}"
   fi
 
   # Line 3: 💰 Today ... │ Week ... │ Month ...
@@ -1012,9 +1187,9 @@ else
       today_tokens_formatted=$(format_tokens "$today_tokens")
       if [ -n "$today_cost" ] && [[ "$today_cost" =~ ^[0-9.]+$ ]]; then
         today_cost_formatted=$(round_money "$today_cost")
-        line3="💰 ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
+        line3="${_icon_cost} ${_today}Today ${today_tokens_formatted}  \$${today_cost_formatted}${_rst}"
       else
-        line3="💰 ${_today}Today ${today_tokens_formatted}${_rst}"
+        line3="${_icon_cost} ${_today}Today ${today_tokens_formatted}${_rst}"
       fi
     fi
 
@@ -1026,7 +1201,7 @@ else
       else
         week_part="${_week}Week ${week_tokens_formatted}${_rst}"
       fi
-      if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${week_part}"; else line3="${week_part}"; fi
+      if [ -n "$line3" ]; then line3="${line3}  ${_sep}${_sep_char}${_rst} ${week_part}"; else line3="${week_part}"; fi
     fi
 
     if [ "${STATUSLINE_SHOW_MONTH:-1}" != "0" ] && [ -n "$month_tokens" ] && [[ "$month_tokens" =~ ^[0-9]+$ ]]; then
@@ -1037,7 +1212,7 @@ else
       else
         month_part="${_month}Month ${month_tokens_formatted}${_rst}"
       fi
-      if [ -n "$line3" ]; then line3="${line3}  ${_sep}│${_rst} ${month_part}"; else line3="${month_part}"; fi
+      if [ -n "$line3" ]; then line3="${line3}  ${_sep}${_sep_char}${_rst} ${month_part}"; else line3="${month_part}"; fi
     fi
   fi
 fi
