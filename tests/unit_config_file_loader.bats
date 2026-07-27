@@ -75,3 +75,42 @@ JSON_WITH_VERSION='{"workspace":{"current_dir":"/tmp/proj/myapp"},"model":{"disp
   [ "$status" -eq 0 ]
   [[ "$output" == *"::"* ]]
 }
+
+# Regression for a P1 finding on PR #6 (real vulnerability, verified by
+# direct testing -- reproduces even on bash 3.2, not just newer bash): a
+# tampered config line whose key looks like an array subscript, e.g.
+# "STATUSLINE_COLOR_DIR[$(some command)]=196", matches the prefix-glob
+# allowlist arm's `STATUSLINE_COLOR_*` pattern (glob `*` matches `[...]`
+# too) with _cfg_key literally containing that subscript text. The exploit
+# trigger turned out to be `${!_cfg_key+x}` (indirect parameter expansion
+# evaluates array-subscript command substitutions when resolving what looks
+# like an array reference), not the printf -v the original review comment
+# flagged -- confirmed by tracing with `bash -x`. Fixed by rejecting any
+# key containing a character outside [A-Za-z0-9_] as the first thing in
+# that arm, before _cfg_key is used in any expansion at all.
+@test "config file: a prefix-glob key with an array-subscript command substitution does not execute it" {
+  local marker="$BATS_TEST_TMPDIR/pwn_marker"
+  local config="STATUSLINE_COLOR_DIR[\$(touch $marker)]=196"
+  run run_statusline_with_config "$JSON" "$config"
+  [ "$status" -eq 0 ]
+  [ ! -f "$marker" ]
+}
+
+@test "config file: the same tampered key rejected above doesn't block a legitimate key on another line" {
+  local marker="$BATS_TEST_TMPDIR/pwn_marker2"
+  local config
+  config="$(printf 'STATUSLINE_COLOR_DIR[$(touch %s)]=196\nSTATUSLINE_ICON_DIR=🚀\n' "$marker")"
+  run run_statusline_with_config "$JSON" "$config"
+  [ "$status" -eq 0 ]
+  [ ! -f "$marker" ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == 🚀* ]]
+}
+
+@test "config file: the STATUSLINE_ICON_* prefix arm rejects the same injection shape" {
+  local marker="$BATS_TEST_TMPDIR/pwn_marker3"
+  local config="STATUSLINE_ICON_DIR[\$(touch $marker)]=x"
+  run run_statusline_with_config "$JSON" "$config"
+  [ "$status" -eq 0 ]
+  [ ! -f "$marker" ]
+}
