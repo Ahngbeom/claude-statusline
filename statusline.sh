@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.10.1
+# Version: 1.10.2
 # License: MIT
 #
 # Features:
@@ -297,6 +297,26 @@
 #     recovery, value-change/preview-refresh correctness, no `\033[2J` in
 #     the output stream).
 
+# Changes (v1.10.2):
+#   - Security fix (P1, flagged by an automated PR #6 review): a tampered
+#     ~/.claude/statusline.conf line whose key looked like an array
+#     subscript -- e.g. `STATUSLINE_COLOR_DIR[$(some command)]=196` --
+#     matched the v1.9.0 prefix-glob allowlist arm (glob `*` matches
+#     `[...]` too) and could execute the embedded command on every
+#     statusline render. The review flagged `printf -v` as the trigger;
+#     direct testing (bash -x tracing) found the actual trigger one line
+#     earlier: `${!_cfg_key+x}` (indirect parameter expansion) evaluates
+#     array-subscript command substitutions when resolving what looks like
+#     an array reference, and it reproduces on every bash version tested
+#     including 3.2 (macOS stock bash) -- this is not the same
+#     bash-version-dependent gap printf -v's own array-target support is.
+#     Fixed by rejecting any key containing a character outside
+#     [A-Za-z0-9_] as the first thing done with it in that arm, before
+#     `_cfg_key` is used in any expansion at all. The exact-match keys
+#     enumerated separately above were never affected (a `case` exact match
+#     can't match a string containing `[...]` in the first place, so a
+#     malicious key never reaches their body).
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -322,12 +342,33 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
-      # Prefix-glob match instead of enumerating every key (there are 31): still
-      # printf -v'd (never eval/source), and printf -v itself rejects anything
-      # that isn't a valid bash identifier, so this doesn't widen the "no
-      # arbitrary code execution" guarantee above -- it only widens which KEY
-      # NAMES are accepted, not how the VALUE is used.
+      # Prefix-glob match instead of enumerating every key (there are 31) --
+      # unlike the exact-match keys above, a glob's `*` matches ANY
+      # characters, including `[...]`. A tampered config line like
+      #   STATUSLINE_COLOR_DIR[$(some command)]=196
+      # matches this pattern with _cfg_key literally containing the array
+      # subscript text. The vulnerable step turned out NOT to be the
+      # printf -v below (confirmed by direct testing) -- it's
+      # `${!_cfg_key+x}` right after: bash's indirect-parameter-expansion
+      # (`${!name}`/`${!name+word}`) evaluates `name` as an array reference
+      # when it looks like one, and evaluates any command substitution
+      # inside that subscript as part of doing so, in EVERY bash version
+      # tested (3.2 included -- this is not the same bash-version-dependent
+      # gap `printf -v`'s array-target support is). So the very first use of
+      # `$_cfg_key` in this arm -- the `${!_cfg_key+x}` presence check --
+      # already executes attacker-controlled commands, before printf -v is
+      # ever reached. Reported by an automated PR review (which flagged
+      # printf -v; testing traced the actual trigger one line earlier).
+      # Fixed by rejecting any key containing a character outside
+      # [A-Za-z0-9_] as the FIRST thing in this arm, before `_cfg_key` is
+      # used in any expansion context, indirect or otherwise -- the prefix
+      # already guarantees these can only ever be STATUSLINE_COLOR_*/
+      # ICON_*/THRESHOLD_*/SEP_CHAR names, so this can't collide with
+      # something like PATH or IFS either.
       STATUSLINE_COLOR_*|STATUSLINE_ICON_*|STATUSLINE_THRESHOLD_*|STATUSLINE_SEP_CHAR)
+        case "$_cfg_key" in
+          *[!A-Za-z0-9_]*) continue ;;
+        esac
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
