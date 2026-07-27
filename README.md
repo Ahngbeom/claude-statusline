@@ -150,6 +150,13 @@ npm uninstall -g @ahngbeom/claude-statusline
 
 ## Color Indicators / 색상 표시
 
+These are the defaults. Both the colors and the percentage cutoffs below are customizable — see
+[Color Customization](#color-customization--색상-커스터마이징) and
+[Threshold Customization](#threshold-customization--임계값-커스터마이징) under Customization.
+
+아래는 기본값입니다. 색상과 퍼센트 기준값 모두 커스터마이징 가능합니다 — Customization 섹션의
+[색상 커스터마이징](#color-customization--색상-커스터마이징), [임계값 커스터마이징](#threshold-customization--임계값-커스터마이징) 참고.
+
 ### Context Window / 컨텍스트 윈도우
 
 | Remaining / 남은 용량 | Color / 색상 |
@@ -202,8 +209,35 @@ shell profile. An environment variable that's already set always takes priority 
 셸 프로필에 환경변수를 export하는 대신 `~/.claude/statusline.conf`에 영구 저장할 수 있습니다.
 이미 설정된 환경변수는 항상 설정 파일보다 우선합니다.
 
+Running `configure.sh` with no arguments on a real terminal opens a full arrow-key TUI: a single
+scrollable list of every setting (grouped by category) with a "Live Preview" panel — `statusline.sh`
+rendered with your current settings — pinned at the top of the screen the whole time, updated immediately
+after every change instead of scrolling away.
+
+`configure.sh`를 인자 없이 실행하면 실제 터미널에서는 화살표 키로 조작하는 풀 TUI가 열립니다: 카테고리별로
+묶인 전체 설정을 하나의 스크롤 목록으로 보여주고, 화면 상단에 "Live Preview" 패널(현재 설정 그대로
+렌더링된 `statusline.sh` 결과)이 항상 고정되어 값을 바꿀 때마다 그 자리에서 즉시 갱신됩니다.
+
+| Key / 키 | Action / 동작 |
+|----------|----------------|
+| `↑` `↓` | Move the cursor / 커서 이동 |
+| `PgUp` `PgDn` | Move a page at a time / 페이지 단위 이동 |
+| `Enter` / `Space` | Toggle an on/off field, or open exact-value entry for others / on-off 필드는 즉시 전환, 나머지는 정확한 값 입력창 |
+| `←` `→` | Nudge a color/percent value by ±1 / 색상·퍼센트 값을 ±1씩 조정 |
+| `r` | Reset the current field to its default / 현재 항목을 기본값으로 리셋 |
+| `R` | Reset everything (with confirmation) / 전체 리셋(확인 후) |
+| `q` / `Esc` | Quit / 종료 |
+
+Piped/non-interactive input (scripts, CI) and `configure.sh menu` explicitly both fall back to a simpler
+numbered menu instead — same "Live Preview" panel, but redrawn after each screen rather than pinned.
+
+파이프/비대화형 입력(스크립트, CI)이나 `configure.sh menu`를 명시적으로 실행하면 더 단순한 번호 메뉴로
+대신 동작합니다 — 같은 "Live Preview" 패널을 보여주지만 화면마다 다시 그려지는 방식이며 고정되지는
+않습니다.
+
 ```bash
-~/.claude/configure.sh              # interactive menu (colors, compact mode, per-line toggles, preview)
+~/.claude/configure.sh              # full arrow-key TUI on a real terminal (numbered menu otherwise)
+~/.claude/configure.sh menu         # force the numbered menu even on a real terminal
 ~/.claude/configure.sh list         # show every setting: effective value + source (env/config/default)
 ~/.claude/configure.sh set STATUSLINE_SHOW_WEEK 0
 ~/.claude/configure.sh get STATUSLINE_SHOW_WEEK
@@ -249,6 +283,64 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 | `STATUSLINE_SHOW_TODAY=0` | Line 3 Today |
 | `STATUSLINE_SHOW_WEEK=0` | Line 3 Week |
 | `STATUSLINE_SHOW_MONTH=0` | Line 3 Month |
+
+### Color Customization / 색상 커스터마이징
+
+Each rendered element's [xterm 256-color](https://www.ditig.com/256-colors-cheat-sheet) code can be
+overridden individually. An out-of-range or non-numeric value silently falls back to the default (same
+graceful-degradation contract as the rest of the script); `NO_COLOR=1` still disables all color output
+regardless of these.
+
+각 렌더링 요소의 [xterm 256색](https://www.ditig.com/256-colors-cheat-sheet) 코드를 개별적으로
+오버라이드할 수 있습니다. 범위를 벗어나거나 숫자가 아닌 값은 조용히 기본값으로 폴백합니다(스크립트의
+다른 부분과 동일한 graceful-degradation 원칙). `NO_COLOR=1`이 설정되면 이 값들과 무관하게 색상 출력
+전체가 비활성화됩니다.
+
+| Variable | Default | Element |
+|----------|---------|---------|
+| `STATUSLINE_COLOR_DIR` | 117 | Line 1 directory |
+| `STATUSLINE_COLOR_MODEL` | 147 | Line 1 model name |
+| `STATUSLINE_COLOR_GIT` | 150 | Line 1 git branch |
+| `STATUSLINE_COLOR_CC_VERSION` | 249 | Line 1 CLI version |
+| `STATUSLINE_COLOR_OUTPUT_STYLE` | 245 | Line 1 output style |
+| `STATUSLINE_COLOR_SEP` | 240 | Separator character (all lines) |
+| `STATUSLINE_COLOR_CACHE` | 120 | Line 2 cache hit rate / tokens-per-min |
+| `STATUSLINE_COLOR_TODAY` | 153 | Line 3 Today |
+| `STATUSLINE_COLOR_WEEK` | 183 | Line 3 Week |
+| `STATUSLINE_COLOR_MONTH` | 216 | Line 3 Month |
+| `STATUSLINE_COLOR_CTX_OK` / `_WARN` / `_CRIT` | 158 / 215 / 203 | Context bar, 3-tier by remaining % (see `STATUSLINE_THRESHOLD_CTX_*` below) |
+| `STATUSLINE_COLOR_SESSION_OK` / `_WARN` / `_CRIT` | 194 / 228 / 210 | Session segment, 3-tier by remaining % |
+| `STATUSLINE_COLOR_MEM_OK` / `_WARN` / `_CRIT` | 120 / 220 / 196 | Line 1 Mem indicator, 3-tier by used % |
+
+### Icon Customization / 아이콘 커스터마이징
+
+| Variable | Default | Element |
+|----------|---------|---------|
+| `STATUSLINE_ICON_DIR` | 📂 | Line 1 directory prefix |
+| `STATUSLINE_ICON_CONTEXT` | 🧠 | Line 2 context segment prefix |
+| `STATUSLINE_ICON_COST` | 💰 | Line 3 (and compact Line 3) cost segment prefix |
+| `STATUSLINE_ICON_CACHE` | 🗄 | Line 2 cache hit rate prefix |
+| `STATUSLINE_ICON_MEM` | 💻 | Line 1 memory indicator prefix |
+
+### Threshold Customization / 임계값 커스터마이징
+
+The percentage cutoffs that pick which 3-tier color renders — see the "Color Indicators" section above
+for what each tier means.
+
+어느 3단계 색상을 쓸지 결정하는 퍼센트 기준값입니다 — 각 단계의 의미는 위 "Color Indicators" 섹션
+참고.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `STATUSLINE_THRESHOLD_CTX_WARN` / `_CRIT` | 40 / 20 | Context remaining % at/below which the bar turns warn/crit-colored |
+| `STATUSLINE_THRESHOLD_MEM_WARN` / `_CRIT` | 60 / 80 | Memory used % at/above which Mem turns warn/crit-colored |
+| `STATUSLINE_THRESHOLD_SESSION_WARN` / `_CRIT` | 25 / 10 | Session remaining % at/below which Session turns warn/crit-colored |
+
+### Separator Character / 구분자 문자
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `STATUSLINE_SEP_CHAR` | `│` | Replaces the separator character between segments on every line / 모든 라인의 세그먼트 구분자 문자 교체 |
 
 ### Compact Mode / 축약 모드
 
