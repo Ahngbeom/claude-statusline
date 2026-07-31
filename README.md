@@ -17,7 +17,7 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 
 | Line | Content / 내용 |
 |------|----------------|
-| 1 | 📂 Directory + Git branch (dirty `*`, ahead/behind `↑↓`) │ Model, CLI version, Output style │ 💻 Memory |
+| 1 | 📂 Directory + Git branch (dirty `*`, ahead/behind `↑↓`) │ Model, CLI version, Output style, ⌘ Session launch flags │ 💻 Memory |
 | 2 | 🧠 Context usage (bar) │ Session time + tokens + cost │ 🗄 Cache + Speed |
 | 3 | 💰 Today │ Week │ Month usage & costs |
 
@@ -30,7 +30,7 @@ shrinks — see "Compact Mode" under Customization below.
 ### Example Output / 예시 출력
 
 ```
-📂 ~/projects/myapp  main* ↑2 │ Opus 4.6  v1.0.44  explanatory  │ 💻 Mem 42%
+📂 ~/projects/myapp  main* ↑2 │ Opus 4.6  v1.0.44  explanatory  ⌘ -c plan │ 💻 Mem 42%
 🧠 Context 45.2K/200K [============--------] 77% │ Session 1.2M $0.12  3h 42m [====------] │ 🗄 87%  12.5K/m
 💰 Today 2.1M  $4.32 │ Week 15.8M  $31.20 │ Month 48.2M  $95.50
 ```
@@ -38,6 +38,10 @@ shrinks — see "Compact Mode" under Customization below.
 `main*` means uncommitted changes are present; `↑2`/`↓1` show commits ahead/behind the upstream branch (both omitted when there's nothing to report).
 
 `main*`는 커밋되지 않은 변경사항이 있음을, `↑2`/`↓1`은 upstream 브랜치 대비 앞서거나 뒤처진 커밋 수를 의미합니다 (보고할 내용이 없으면 생략).
+
+`⌘ -c plan` means this session was started with `claude -c --permission-mode plan` — see "Session Launch Flags" below. The whole segment is omitted when the session was started with plain `claude`.
+
+`⌘ -c plan`은 이 세션이 `claude -c --permission-mode plan`으로 시작되었음을 의미합니다 — 아래 "세션 기동 옵션" 참고. 플래그 없이 그냥 `claude`로 시작한 경우 세그먼트 전체가 생략됩니다.
 
 With `STATUSLINE_UNICODE=1` / Unicode 모드:
 ```
@@ -263,12 +267,13 @@ Use `configure.sh` above, or edit `~/.claude/statusline.sh` directly for anythin
 | `STATUSLINE_COMPACT=1` / `=0` | Force the compact layout on or off, overriding `$COLUMNS` auto-detection / 터미널 폭과 무관하게 축약 레이아웃을 강제 on/off |
 | `STATUSLINE_COMPACT_WIDTH=<cols>` | Auto-compact trigger threshold, default `80` — compact mode kicks in when `$COLUMNS` is below this / 자동 축약 전환 기준 폭 (기본값 80) |
 | `STATUSLINE_CONFIG_FILE=<path>` | Override the `~/.claude/statusline.conf` path read/written by `configure.sh` / `configure.sh`가 읽고 쓰는 설정 파일 경로 오버라이드 |
+| `STATUSLINE_SESSION_CMD=<cmd>` | Override the auto-detected launch command, e.g. `claude -c` — see "Session Launch Flags" below / 자동 감지된 기동 명령어를 직접 지정 (아래 "세션 기동 옵션" 참고) |
 
 ### Per-line Display Toggles / 라인별 표시 토글
 
-All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0` also skip the underlying git/memory subprocess call, not just the rendering.
+All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`/`STATUSLINE_SHOW_SESSION_CMD=0` also skip the underlying git/memory/process-lookup subprocess call, not just the rendering.
 
-전부 기본값 `1`(표시)이며, `0`으로 설정하면 숨겨집니다. `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`은 렌더링뿐 아니라 해당 git/메모리 서브프로세스 호출 자체도 건너뜁니다.
+전부 기본값 `1`(표시)이며, `0`으로 설정하면 숨겨집니다. `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`/`STATUSLINE_SHOW_SESSION_CMD=0`은 렌더링뿐 아니라 해당 git/메모리/프로세스 조회 서브프로세스 호출 자체도 건너뜁니다.
 
 | Variable | Hides |
 |----------|-------|
@@ -277,6 +282,7 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 | `STATUSLINE_SHOW_CC_VERSION=0` | Line 1 CLI version (`v1.0.44`) |
 | `STATUSLINE_SHOW_OUTPUT_STYLE=0` | Line 1 output style |
 | `STATUSLINE_SHOW_MEM=0` | Line 1 `💻 Mem NN%` |
+| `STATUSLINE_SHOW_SESSION_CMD=0` | Line 1 `⌘ ...` session launch flags / Line 1 세션 기동 옵션 |
 | `STATUSLINE_SHOW_SESSION=0` | Line 2 Session segment (tokens/cost/time/bar) |
 | `STATUSLINE_SHOW_CACHE=0` | Line 2 `🗄 NN%` cache hit rate |
 | `STATUSLINE_SHOW_SPEED=0` | Line 2 tokens/min |
@@ -303,6 +309,7 @@ regardless of these.
 | `STATUSLINE_COLOR_GIT` | 150 | Line 1 git branch |
 | `STATUSLINE_COLOR_CC_VERSION` | 249 | Line 1 CLI version |
 | `STATUSLINE_COLOR_OUTPUT_STYLE` | 245 | Line 1 output style |
+| `STATUSLINE_COLOR_SESSION_CMD` | 245 | Line 1 session launch flags |
 | `STATUSLINE_COLOR_SEP` | 240 | Separator character (all lines) |
 | `STATUSLINE_COLOR_CACHE` | 120 | Line 2 cache hit rate / tokens-per-min |
 | `STATUSLINE_COLOR_TODAY` | 153 | Line 3 Today |
@@ -321,6 +328,71 @@ regardless of these.
 | `STATUSLINE_ICON_COST` | 💰 | Line 3 (and compact Line 3) cost segment prefix |
 | `STATUSLINE_ICON_CACHE` | 🗄 | Line 2 cache hit rate prefix |
 | `STATUSLINE_ICON_MEM` | 💻 | Line 1 memory indicator prefix |
+| `STATUSLINE_ICON_SESSION_CMD` | ⌘ | Line 1 session launch flags prefix |
+
+### Session Launch Flags / 세션 기동 옵션
+
+Line 1 shows which CLI flags the current session was started with, so you can tell a fresh session from
+a `claude -c` one at a glance — and spot a window running with `--dangerously-skip-permissions`.
+
+Line 1에 현재 세션이 어떤 CLI 플래그로 시작되었는지 표시되어, 새로 시작한 세션과 `claude -c`로 이어붙인
+세션을 한눈에 구분할 수 있고 `--dangerously-skip-permissions`가 걸린 창도 바로 알아볼 수 있습니다.
+
+```
+⌘ -c plan effort:high        # claude -c --permission-mode plan --effort high
+⌘ resume bypass              # claude --resume <id> --dangerously-skip-permissions
+⌘ agent:reviewer +mcp        # claude --agent reviewer --mcp-config ./servers.json
+(nothing)                    # claude
+```
+
+| argv | Rendered as |
+|------|-------------|
+| `-c` / `--continue` | `-c` |
+| `-r` / `--resume` | `resume` (the session UUID is never shown) |
+| `--fork-session` | `fork` |
+| `--permission-mode <m>` | the mode name itself (`plan`, `acceptEdits`, ...) |
+| `--dangerously-skip-permissions` | `bypass` |
+| `--bare` / `--worktree` | `bare` / `wt` |
+| `--effort` / `--agent` / `--teammate-mode` | `effort:<v>` / `agent:<v>` / `teammate:<v>` |
+| `--add-dir` | `+dir` |
+| `--settings` / `--mcp-config` / `--agents` | `+settings` / `+mcp` / `+agents` (values never shown) |
+| `--system-prompt[-file]`, `--append-system-prompt[-file]` | `+sysprompt` (value never shown) |
+| `-d` / `--debug` / `--verbose` | `debug` |
+| anything else (`--model`, `--session-id`, `--name`, the prompt itself) | not shown |
+
+Values are only rendered when they match `[A-Za-z0-9._-]{1,20}`; anything else (a path, a prompt, an
+ANSI escape) is dropped and just the flag name renders. Output is deduped and capped at 40 characters,
+and the whole segment is omitted in compact mode.
+
+값은 `[A-Za-z0-9._-]{1,20}` 패턴에 맞을 때만 렌더링되고, 그 외(경로·프롬프트·ANSI 이스케이프 등)는
+버려지고 플래그 이름만 표시됩니다. 결과는 중복 제거 후 40자로 제한되며, 축약 모드에서는 세그먼트 전체가
+생략됩니다.
+
+**Where this comes from / 데이터 출처.** Claude Code does not pass any CLI argument (or the permission
+mode) to statusline scripts via stdin — its documented payload has no such field. So this reads the argv
+of the nearest ancestor `claude` process instead: zero subprocesses on Linux (`/proc/<pid>/cmdline`),
+normally one `ps` call on macOS/BSD.
+
+Claude Code는 CLI 인자(그리고 권한 모드)를 statusline 스크립트의 stdin으로 전달하지 않습니다 — 공식
+스키마에 해당 필드가 없습니다. 따라서 가장 가까운 상위 `claude` 프로세스의 argv를 직접 읽습니다:
+Linux는 서브프로세스 0개(`/proc/<pid>/cmdline`), macOS/BSD는 통상 `ps` 호출 1회입니다.
+
+**Two caveats / 주의사항 2가지**
+
+1. This is the **launch** argv, so `--permission-mode` here is the value the session *started* with.
+   Changing the mode mid-session with Shift+Tab does not update it (argv is immutable, and the live
+   value isn't available to statusline scripts at all).
+2. If a wrapper, multiplexer or shell function sits more than 3 process levels between Claude Code and
+   the statusline script, auto-detection finds nothing and the segment stays empty. Set
+   `STATUSLINE_SESSION_CMD` (env var or `configure.sh set`) to the command string you want parsed —
+   it goes through the exact same whitelist above.
+
+1. 이 값은 **기동 시점** argv입니다. 따라서 `--permission-mode`는 세션이 *시작될 때*의 값이며, 세션 중
+   Shift+Tab으로 모드를 바꿔도 갱신되지 않습니다 (argv는 불변이고, 실시간 값은 statusline 스크립트에
+   전달되지 않습니다).
+2. 래퍼·멀티플렉서·셸 함수가 Claude Code와 statusline 스크립트 사이에 3단계 넘게 끼어 있으면 자동 감지가
+   실패해 세그먼트가 비어 있게 됩니다. 이 경우 `STATUSLINE_SESSION_CMD`(환경변수 또는 `configure.sh set`)에
+   파싱할 명령어 문자열을 직접 지정하세요 — 위와 완전히 동일한 화이트리스트를 통과합니다.
 
 ### Threshold Customization / 임계값 커스터마이징
 

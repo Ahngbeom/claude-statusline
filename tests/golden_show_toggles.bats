@@ -66,6 +66,23 @@ setup_git_repo() {
   [[ "$line1" == *"Mem"* ]]
 }
 
+@test "golden: STATUSLINE_SHOW_SESSION_CMD=0 hides the session launch flags" {
+  run run_statusline "$JSON" STATUSLINE_SHOW_SESSION_CMD=0 STATUSLINE_SESSION_CMD='claude -c'
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" != *"⌘"* ]]
+}
+
+@test "golden: default (no SHOW_SESSION_CMD set) renders the session launch flags" {
+  # See test_helper.bash: the suite forces this toggle off for determinism, so
+  # the "default is on" behavior is asserted by dropping the override rather
+  # than by omitting it.
+  run run_statusline "$JSON" -u STATUSLINE_SHOW_SESSION_CMD STATUSLINE_SESSION_CMD='claude -c'
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"⌘ -c"* ]]
+}
+
 @test "golden: STATUSLINE_SHOW_GIT=0 hides the whole git segment" {
   base="$(mktemp -d)"
   setup_git_repo "$base"
