@@ -52,7 +52,8 @@ Claude Code CLI → stdin(세션 JSON) → statusline.sh → stdout(3줄 ANSI �
 | 세션 JSONL | `~/.claude/projects/-{encoded-dir}/{session-id}.jsonl` 마지막 20줄 | Line 2 (컨텍스트 토큰) | Fallback |
 | ccusage 캐시 | `~/.claude/stats-cache.json` (TTL 60초, 백그라운드 갱신) | Line 2 (세션), Line 3 (비용) | — |
 | Git | `git branch --show-current` | Line 1 (브랜치명) | — |
-| 사용자 설정 파일 | `~/.claude/statusline.conf` (`configure.sh`가 씀) | 전체 (표시 여부/색상/compact 등 17개 설정) | env var보다 후순위 |
+| 부모 프로세스 argv | `/proc/<pid>/cmdline` (Linux) 또는 `ps -o ppid=,args=` (macOS/BSD) | Line 1 (세션 기동 CLI 플래그) | — |
+| 사용자 설정 파일 | `~/.claude/statusline.conf` (`configure.sh`가 씀) | 전체 (표시 여부/색상/compact 등 19개 설정) | env var보다 후순위 |
 
 `statusline.sh`는 stdout 3줄 외에 side-channel 출력도 하나 만든다: stdin의 `rate_limits`(있으면)를
 그대로 `~/.claude/rate-limits-cache.json`에 써서 남긴다. 이 스크립트 자신은 이 값을 렌더링에 쓰지
@@ -85,6 +86,16 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 
 `context_window`와 `cost`는 Claude Code >= v17.2.0에서 제공. 없으면 JSONL fallback으로 컨텍스트를 계산하고, 세션 비용은 ccusage blocks 데이터를 사용한다.
 
+**stdin에 없는 것 (재조사 방지용 기록, 2026-07-30 v2.1.220 기준):** `permission_mode`와 **모든 CLI
+인자**(`-c`/`--resume`/`--model`/`--permission-mode` 등)는 statusline stdin JSON에 **없다**. 공식 문서
+(code.claude.com/docs/en/statusline)의 전체 스키마에도 없고, 바이너리의 statusline 페이로드 생성 함수를
+확인해 보면 공통 훅 헬퍼(`session_id`/`transcript_path`/`cwd`/`prompt_id`/`permission_mode`를 반환)를
+**인자 없이** 호출하기 때문에 `permission_mode`가 `undefined`가 되어 `JSON.stringify`에서 탈락한다.
+그래서 세션 기동 옵션은 부모 프로세스 argv에서 읽는다 (아래 `# ---- session invocation` 섹션).
+"세션이 어떤 옵션으로 켜졌나"에 stdin으로 답할 수 있는 필드는 `agent.name`(`--agent`),
+`worktree.*`(`--worktree`), `workspace.added_dirs`(`--add-dir`), `session_name`(`--name`//`rename`),
+`fast_mode`, `effort.level`, `thinking.enabled`, `vim.mode` 정도이며 현재 이 스크립트는 쓰지 않는다.
+
 `rate_limits`는 Claude.ai Pro/Max 구독자에 한해, 세션 중 첫 API 응답 이후부터 제공된다(API 키
 사용자나 첫 응답 이전에는 없거나 `five_hour`/`seven_day` 중 한쪽만 있을 수 있음). `used_percentage`는
 0~100, `resets_at`은 그 윈도우가 리셋되는 UTC epoch초. `statusline.sh`는 이 값을 렌더링에 쓰지 않고
@@ -114,21 +125,27 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 `configure.sh set/get/unset/list/reset/path` CLI로 자신의 표시 설정을 영구 저장할 수 있다.
 `statusline.sh`는 시작 시(`STATUSLINE_CONFIG_FILE` 환경변수로 경로 오버라이드 가능, 기본
 `~/.claude/statusline.conf`) 이 파일을 `KEY=VALUE` 줄 단위로 파싱해 읽는다 — `source`하지 않고
-17개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
+19개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
 있으면 그 키는 건너뛴다** (env var가 항상 config 파일보다 우선). 서브프로세스를 하나도 만들지
-않는다 (순수 bash while-read).
+않는다 (순수 bash while-read). `STATUSLINE_COLOR_*`/`STATUSLINE_ICON_*`/`STATUSLINE_THRESHOLD_*`/
+`STATUSLINE_SEP_CHAR`는 이 19개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
+로더를 건드리지 않아도 된다 (`configure.sh`의 4개 레지스트리만 갱신).
 
-17개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
+19개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
 - **presence**: `NO_COLOR`/`STATUSLINE_UNICODE`/`STATUSLINE_HIDE_COST` — `statusline.sh`가 `-z`/`-n`으로
   검사하므로 "켬"은 `KEY=1`을 쓰고 "끔"은 **키 자체를 삭제**해야 한다 (`KEY=0`을 쓰면 `-z`가
   거짓이 되어 오히려 "켬"으로 해석됨 — `configure.sh`가 이 변환을 대신 처리)
 - **tristate**: `STATUSLINE_COMPACT` — `1`/`0`/키 삭제(`$COLUMNS` 자동 감지로 복귀) 3가지
 - **numeric**: `STATUSLINE_COMPACT_WIDTH`, `STATUSLINE_MAX_CONTEXT`
-- **bool**: 신규 `STATUSLINE_SHOW_*` 11개 — 값 기반, 기본값 `1`(표시), `0`이면 숨김
+- **bool**: `STATUSLINE_SHOW_*` 12개 — 값 기반, 기본값 `1`(표시), `0`이면 숨김
+- **text**: `STATUSLINE_SESSION_CMD` — 임의 문자열이지만 원문 렌더링은 하지 않고
+  `_format_session_cmd` 화이트리스트를 통과시키므로 주입 표면이 없다 (`STATUSLINE_ICON_*`/
+  `STATUSLINE_SEP_CHAR`도 같은 `text` 타입이지만 그쪽은 `printf %s` 인자로만 쓰인다는 다른 근거)
 
-`STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`은 렌더링만 숨기는 게 아니라 각각 git 정보 수집
-(`_gather_git_info`)과 `get_mem_usage()` 호출 자체를 건너뛰어 서브프로세스를 아낀다 (compact 모드는
-Mem을 원래 렌더링하지 않으므로 `_compact` 여부와 무관하게 항상 스킵). `update_cache_background()`도
+`STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`/`STATUSLINE_SHOW_SESSION_CMD=0`은 렌더링만 숨기는 게
+아니라 각각 git 정보 수집(`_gather_git_info`), `get_mem_usage()`, `_gather_session_argv()` 호출 자체를
+건너뛰어 서브프로세스를 아낀다 (compact 모드는 Mem과 세션 기동 옵션을 원래 렌더링하지 않으므로 둘 다
+`_compact=1`이면 무조건 스킵). `update_cache_background()`도
 `STATUSLINE_SHOW_TODAY`/`WEEK`/`MONTH`가 각각 `0`이면 대응 `ccusage daily/weekly/monthly` 호출을
 개별적으로 생략한다 — 단 `ccusage blocks`는 캐시 파일 전체 쓰기를 게이트하는 역할도 겸하므로,
 Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항상 실행된다.
@@ -144,11 +161,13 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 | progress bar 문자 | `# ---- progress bar characters` | `STATUSLINE_UNICODE` 여부로 `▰▱` 또는 `=-` 선택 |
 | compact mode 감지 | `# ---- compact mode detection` | `$COLUMNS`/`STATUSLINE_COMPACT`/`STATUSLINE_COMPACT_WIDTH`로 `is_compact_mode()` 판정, `_compact` 변수에 저장 |
 | 헬퍼 함수 | `# ---- time helpers`, `# ---- pure bash progress bar`, `# ---- pure bash format_tokens` | `to_epoch()`, `progress_bar()`, `format_tokens()`, `get_mem_usage()` 등 순수 bash |
+| 세션 기동 옵션 | `# ---- session invocation (CLI argv)` | `_sc_sanitize()`/`_format_session_cmd()`(순수 bash 화이트리스트, REPLY 반환)와 `_gather_session_argv()`(상위 3단계까지 `claude` 프로세스 argv 탐색, Linux `/proc` 0포크 · macOS `ps` 1포크) |
 | 캐싱 레이어 | `# ---- cache helpers for ccusage data` | ccusage 결과 캐시, 4개 명령 병렬 실행, atomic write + lock |
 | 입력 파싱 | `# ---- parse input with single jq call` | 단일 jq 호출, Unit Separator(0x1f) 구분자. `rate_limits`도 이 한 번의 jq 호출에서 함께 추출(전용 서브프로세스 추가 없음) |
 | rate limits 캐시 | `# ---- rate limits cache` | stdin `rate_limits`를 변형 없이 `~/.claude/rate-limits-cache.json`에 atomic write(외부 소비자용 side-channel — 이 스크립트의 stdout 렌더링과 무관) |
 | 컨텍스트 계산 | `# ---- context window calculation` | stdin context_window 우선, JSONL fallback |
 | ccusage 통합 | `# ---- ccusage integration` | 일/주/월 통계, 세션 시간, 캐시 히트율 |
+| 세션 기동 옵션 수집 | `# ---- session invocation` (렌더 직전, `# ---- memory usage` 다음) | `_compact=0` + `STATUSLINE_SHOW_SESSION_CMD!=0`일 때만 `_gather_session_argv` → `_format_session_cmd` 실행해 `$_session_cmd` 설정 |
 | 렌더링 | `# ---- render statusline` | `$_compact` 값으로 축약/전체 레이아웃 분기 후 3줄 출력 조립 |
 
 ### 파일 역할
@@ -174,6 +193,7 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 - `context_window` stdin 필드 사용 시 JSONL 파일 I/O 완전 제거 (v1.3.0)
 - 사용되지 않던 `session_txt`/`fmt_time_hm()` 제거로 세션 렌더링 시 불필요한 `date` 서브프로세스 포크 제거 (v1.3.4)
 - `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0` 설정 시 git 수집/`get_mem_usage()` 호출 자체를 스킵, `STATUSLINE_SHOW_TODAY`/`WEEK`/`MONTH=0` 설정 시 `update_cache_background()`의 대응 `ccusage` 백그라운드 호출을 개별 스킵 (v1.8.0)
+- 세션 기동 옵션은 Linux `/proc/<pid>/cmdline`+`/proc/<pid>/stat`을 순수 bash로 읽어 **0포크**, macOS/BSD는 `ps -o ppid=,args=` 한 번으로 부모 argv와 조부모 PID를 동시에 얻어 통상 **1포크**. compact 모드나 `STATUSLINE_SHOW_SESSION_CMD=0`이면 탐색 자체를 스킵. `ps`에 `with_timeout`을 걸지 않는 것은 단일 PID 조회이고 가드 자체가 이 설계가 아끼려는 포크를 추가하기 때문 (`vm_stat`/`sysctl`을 가드하지 않는 것과 동일한 판단) (v1.11.0)
 
 ## Dependencies
 
@@ -192,11 +212,13 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 - `STATUSLINE_HIDE_COST=1` 환경변수로 세션 비용(Line 2)과 Line 3 전체 숨김
 - `STATUSLINE_COMPACT=1`/`=0` 환경변수로 축약 레이아웃 강제 on/off (미설정 시 `$COLUMNS` 자동 감지)
 - `STATUSLINE_COMPACT_WIDTH=<cols>` 환경변수로 자동 축약 전환 기준 폭 오버라이드 (기본값 80)
-- `STATUSLINE_SHOW_*=1/0` 11개 환경변수(GIT/GIT_STATUS/CC_VERSION/OUTPUT_STYLE/MEM/SESSION/CACHE/SPEED/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
+- `STATUSLINE_SHOW_*=1/0` 12개 환경변수(GIT/GIT_STATUS/CC_VERSION/OUTPUT_STYLE/MEM/SESSION_CMD/SESSION/CACHE/SPEED/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
+- `STATUSLINE_SESSION_CMD=<cmd>` 환경변수로 부모 프로세스 argv 자동 탐색을 건너뛰고 기동 명령어를 직접 지정 (래퍼/멀티플렉서가 프로세스 체인을 3단계 넘게 늘려 자동 탐색이 실패하는 환경의 탈출구 겸, 골든 테스트의 플랫폼 독립 seam — 원문 렌더링이 아니라 자동 탐색과 동일한 화이트리스트를 통과한다)
 - 위 모든 env var는 `~/.claude/statusline.conf`(`configure.sh`가 관리)로도 설정 가능하며, 이미 설정된 env var가 항상 config 파일 값보다 우선함
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
 - Git 브랜치명은 dirty(`*`)/ahead-behind(`↑N↓N`) 표시를 포함하며, upstream 미설정 시 ahead/behind는 조용히 생략됨 (graceful degradation과 동일한 원칙)
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
+- Line 1의 세션 기동 옵션(`⌘ ...`)은 **기동 시점 argv**다. 따라서 `--permission-mode`는 세션이 시작될 때의 값이며 세션 중 Shift+Tab 변경을 따라가지 않는다 — 이건 버그가 아니라 데이터 출처의 성질이다. 실시간 권한 모드는 stdin에 없고 transcript JSONL의 `{"type":"permission-mode"}` 레코드에는 타임스탬프가 없어 "마지막 값"을 신뢰할 수 없으므로 tail 스캔으로 "고치지" 말 것. 새 플래그를 화이트리스트에 추가할 때는 값이 경로/프롬프트/JSON이면 값은 버리고 존재만 렌더링하고(`+mcp`/`+sysprompt` 패턴), 값을 보여줄 플래그는 반드시 `_sc_sanitize`를 거칠 것 — `tests/unit_session_cmd.bats`가 ANSI/개행/길이 초과 케이스를 검증한다
 
 ### Usage counter semantics
 

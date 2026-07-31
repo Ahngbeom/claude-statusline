@@ -1,11 +1,12 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.10.2
+# Version: 1.11.0
 # License: MIT
 #
 # Features:
-#   Line 1: Directory + Git branch (dirty */ahead-behind ↑↓) │ Model, CLI version, Output style
+#   Line 1: Directory + Git branch (dirty */ahead-behind ↑↓) │ Model, CLI version, Output style,
+#           session launch flags (⌘ -c / plan / bypass ...)
 #   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed
 #   Line 3: Daily │ Weekly │ Monthly usage and costs
 #   Compact mode: auto-shrinks the above on narrow terminals (see STATUSLINE_COMPACT below)
@@ -30,6 +31,10 @@
 #   STATUSLINE_SHOW_CC_VERSION=1/0   Line 1 CLI version (default 1)
 #   STATUSLINE_SHOW_OUTPUT_STYLE=1/0 Line 1 output style (default 1)
 #   STATUSLINE_SHOW_MEM=1/0          Line 1 memory indicator (default 1)
+#   STATUSLINE_SHOW_SESSION_CMD=1/0  Line 1 session launch flags (default 1)
+#   STATUSLINE_SESSION_CMD=<cmd>     Override the auto-detected launch command
+#                                    (e.g. "claude -c"); still filtered by the
+#                                    same flag whitelist, never printed as-is
 #   STATUSLINE_SHOW_SESSION=1/0      Line 2 Session segment (default 1)
 #   STATUSLINE_SHOW_CACHE=1/0        Line 2 cache hit rate (default 1)
 #   STATUSLINE_SHOW_SPEED=1/0        Line 2 tokens/min (default 1)
@@ -317,6 +322,42 @@
 #     can't match a string containing `[...]` in the first place, so a
 #     malicious key never reaches their body).
 
+# Changes (v1.11.0):
+#   - Line 1 now shows which CLI flags this session was started with, e.g.
+#     "⌘ -c plan effort:high". Motivation: with several sessions open there
+#     was nothing on screen to tell a fresh session from a `claude -c` one,
+#     or to flag a window running with --dangerously-skip-permissions.
+#   - The data is NOT in the stdin JSON. Claude Code builds the statusLine
+#     payload by spreading its shared hook helper with no arguments, so
+#     `permission_mode` comes out undefined and is dropped, and no CLI
+#     argument is forwarded at all (verified against the v2.1.220 binary and
+#     the documented full schema). So this reads the argv of the nearest
+#     ancestor `claude` process instead -- our own parent -- walking up at
+#     most 3 levels to get past any intermediate shell.
+#   - Cost: zero forks on Linux (/proc/<pid>/cmdline read in pure bash),
+#     normally one `ps` fork on macOS/BSD (a single call returns the parent's
+#     argv and the grandparent pid together). Skipped entirely in compact
+#     mode and when STATUSLINE_SHOW_SESSION_CMD=0 -- the work is skipped, not
+#     just the render, same rule as STATUSLINE_SHOW_MEM.
+#   - Rendering is a flag whitelist, not a pass-through. Real argv carries
+#     --append-system-prompt <hundreds of chars>, --mcp-config <path that may
+#     embed a token> and --agents <json>; those render as +sysprompt/+mcp/
+#     +agents with the value dropped. Values that ARE shown
+#     (--permission-mode/--effort/--agent/--teammate-mode) must match
+#     [A-Za-z0-9._-]{1,20} or the value is dropped and only the flag name
+#     renders, so an argv carrying an ANSI escape or newline can't corrupt
+#     Line 1. Output is deduped and hard-capped at 40 chars.
+#   - Caveat: this is *launch* argv, so --permission-mode here is the startup
+#     value and does not follow a mid-session Shift+Tab change. The live
+#     value isn't in stdin either, and the transcript JSONL's
+#     {"type":"permission-mode"} records carry no timestamp, so tail-scanning
+#     for "the latest one" isn't trustworthy enough to build on.
+#   - New settings: STATUSLINE_SHOW_SESSION_CMD (default 1),
+#     STATUSLINE_SESSION_CMD (override the detected command -- an escape
+#     hatch for wrapper/multiplexer process chains the ancestor walk can't
+#     reach; it feeds the same whitelist, so it is not a way to print
+#     arbitrary text), STATUSLINE_COLOR_SESSION_CMD, STATUSLINE_ICON_SESSION_CMD.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -338,6 +379,7 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
       \#*) continue ;;
       NO_COLOR|STATUSLINE_UNICODE|STATUSLINE_HIDE_COST|STATUSLINE_COMPACT|STATUSLINE_COMPACT_WIDTH|STATUSLINE_MAX_CONTEXT|\
       STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
+      STATUSLINE_SHOW_SESSION_CMD|STATUSLINE_SESSION_CMD|\
       STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH)
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
@@ -400,6 +442,7 @@ if [ -z "$NO_COLOR" ]; then
   _resolve_color "$STATUSLINE_COLOR_GIT" 150;                  _git=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_CC_VERSION" 249;           _ccver=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_OUTPUT_STYLE" 245;         _style=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_SESSION_CMD" 245;          _cmd=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_SEP" 240;                  _sep=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_CACHE" 120;                _cache=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_TODAY" 153;                _today=$'\033[38;5;'"${REPLY}m"
@@ -419,7 +462,7 @@ if [ -z "$NO_COLOR" ]; then
   _resolve_color "$STATUSLINE_COLOR_MEM_WARN" 220;             _mem_warn=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_MEM_CRIT" 196;             _mem_crit=$'\033[38;5;'"${REPLY}m"
 else
-  _dir="" _model="" _ccver="" _style="" _git=""
+  _dir="" _model="" _ccver="" _style="" _git="" _cmd=""
   _cache="" _today="" _week="" _month=""
   _ctx="" _sep="" _rst=""
   _ctx_ok="" _ctx_warn="" _ctx_crit=""
@@ -433,6 +476,7 @@ _icon_ctx="${STATUSLINE_ICON_CONTEXT:-🧠}"
 _icon_cost="${STATUSLINE_ICON_COST:-💰}"
 _icon_cache="${STATUSLINE_ICON_CACHE:-🗄}"
 _icon_mem="${STATUSLINE_ICON_MEM:-💻}"
+_icon_session_cmd="${STATUSLINE_ICON_SESSION_CMD:-⌘}"
 
 # ---- separator character override ----
 _sep_char="${STATUSLINE_SEP_CHAR:-│}"
@@ -661,6 +705,161 @@ get_mem_usage() {
   echo ""
 }
 
+# ---- session invocation (CLI argv) ----
+# Which flags this session was started with (`claude -c`, `--permission-mode
+# plan`, `--dangerously-skip-permissions`, ...) is NOT available in the stdin
+# JSON: Claude Code builds the statusLine payload by spreading the shared hook
+# helper with no arguments, so `permission_mode` comes out undefined and is
+# dropped, and no CLI argument is forwarded at all (confirmed against the
+# v2.1.220 binary and the documented full schema). The one place the
+# information does exist is the argv of the `claude` process itself -- which
+# is our own parent -- and argv is immutable for the process lifetime, so it
+# is an exact record of how the session was launched.
+#
+# Trade-off to keep in mind: because it is *launch* argv, `--permission-mode`
+# here is the startup value. Toggling the mode mid-session (Shift+Tab) does
+# not change argv, so this segment does not follow it. The live value isn't in
+# stdin either; the transcript JSONL's {"type":"permission-mode"} records
+# carry no timestamp, so tail-scanning them for "the latest one" isn't
+# trustworthy enough to build on.
+
+# Sets _sc_val to $1 when it is a short, plain [A-Za-z0-9._-] token that is
+# safe to render verbatim, and to "" otherwise. argv is external input (it can
+# come from a wrapper, a shell alias, or STATUSLINE_SESSION_CMD), and a value
+# carrying an ANSI escape or a newline would corrupt Line 1 -- so anything
+# outside the character class is dropped whole rather than escaped in place,
+# the same "validate before use, never sanitize in place" posture as the
+# config-file loader above.
+_sc_sanitize() {
+  _sc_val=""
+  local v="${1-}"
+  # Every early exit is `return 0`: "no usable value" is a normal outcome
+  # reported through _sc_val, not an error -- a bare `return` would inherit
+  # the failing test's status and abort any caller running under `set -e`.
+  [ -n "$v" ] || return 0
+  [ "${#v}" -le 20 ] || return 0
+  case "$v" in *[!A-Za-z0-9._-]*) return 0 ;; esac
+  _sc_val="$v"
+}
+
+# Sets REPLY to a compact rendering of the session-defining flags in the argv
+# passed as "$@" (REPLY convention matches _resolve_color above: no command
+# substitution, so no fork). Deliberately a whitelist, not a pass-through:
+# real-world argv carries `--append-system-prompt <hundreds of chars>`,
+# `--mcp-config <path that may embed a token>` and `--agents <json>`, none of
+# which belong on a status line. Anything unrecognized -- including the
+# positional prompt, --model (already rendered as the model name) and
+# --session-id -- is skipped, and an argv with no whitelisted flag at all
+# (plain `claude`) yields "" so the segment disappears entirely instead of
+# rendering an empty label.
+_format_session_cmd() {
+  REPLY=""
+  local tok label out="" seen=""
+  while [ "$#" -gt 0 ]; do
+    tok="$1"; shift
+    label=""
+    case "$tok" in
+      -c|--continue)                  label="-c" ;;
+      # The session id that may follow --resume is a UUID: too long for Line 1
+      # and already exposed as session_id, so only the fact is rendered.
+      -r|--resume)                    label="resume" ;;
+      --fork-session)                 label="fork" ;;
+      --dangerously-skip-permissions) label="bypass" ;;
+      --bare)                         label="bare" ;;
+      --worktree)                     label="wt" ;;
+      --add-dir)                      label="+dir" ;;
+      # Flags whose value is a path, a prompt or a JSON blob: the presence is
+      # useful, the value must never reach the screen.
+      --settings)                     label="+settings" ;;
+      --mcp-config)                   label="+mcp" ;;
+      --agents)                       label="+agents" ;;
+      --system-prompt|--system-prompt-file|\
+      --append-system-prompt|--append-system-prompt-file)
+                                      label="+sysprompt" ;;
+      -d|--debug|--verbose)           label="debug" ;;
+      # Flags worth showing with their value, when the value passes
+      # _sc_sanitize; otherwise the bare flag name still records that it was
+      # used.
+      --permission-mode)              _sc_sanitize "${1-}"; label="${_sc_val:-perm}" ;;
+      --effort)                       _sc_sanitize "${1-}"; label="effort${_sc_val:+:$_sc_val}" ;;
+      --agent)                        _sc_sanitize "${1-}"; label="agent${_sc_val:+:$_sc_val}" ;;
+      --teammate-mode)                _sc_sanitize "${1-}"; label="teammate${_sc_val:+:$_sc_val}" ;;
+    esac
+    [ -n "$label" ] || continue
+    # First-occurrence-wins dedup (a flag repeated on the command line, or two
+    # spellings of the same one like -c/--continue, renders once).
+    case "$seen" in
+      *" $label "*) continue ;;
+    esac
+    seen="$seen $label "
+    out="${out:+$out }$label"
+  done
+  # Hard cap so a long wrapper invocation can't push Line 1 into a wrap.
+  [ "${#out}" -le 40 ] || out="${out:0:39}…"
+  REPLY="$out"
+}
+
+# Sets the _session_argv array to the argv of the nearest ancestor `claude`
+# process, or leaves it empty when none is found within 3 levels (which is
+# also the graceful-degradation path for unusual wrapper/multiplexer process
+# chains -- STATUSLINE_SESSION_CMD is the escape hatch there).
+_gather_session_argv() {
+  _session_argv=()
+  # Explicit override: skip process probing entirely. Still goes through the
+  # same _format_session_cmd whitelist as auto-detected argv, so this is an
+  # input to the same filter, not a way to print arbitrary text.
+  if [ -n "$STATUSLINE_SESSION_CMD" ]; then
+    read -r -a _session_argv <<< "$STATUSLINE_SESSION_CMD"
+    return
+  fi
+  local pid="$PPID" depth=0 ppid tok statline rest arg0
+  local -a cur=()
+  while [ "$depth" -lt 3 ] && [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ]; do
+    depth=$((depth + 1))
+    cur=(); ppid=""
+    if [ -r "/proc/$pid/cmdline" ]; then
+      # Linux: NUL-separated argv read in pure bash -- zero forks, and values
+      # containing spaces stay intact as single tokens.
+      while IFS= read -r -d '' tok; do cur+=("$tok"); done < "/proc/$pid/cmdline"
+      if [ -r "/proc/$pid/stat" ]; then
+        read -r statline < "/proc/$pid/stat"
+        # Field 2 (comm) is parenthesized and can itself contain spaces and
+        # parens, so cut past the last ") " before splitting: ppid is then the
+        # second field of the remainder (first is state).
+        statline="${statline##*') '}"
+        rest="${statline#* }"
+        ppid="${rest%% *}"
+      fi
+    else
+      # macOS/BSD: a single `ps` yields the parent's argv and the grandparent
+      # pid together, so the whole walk normally costs one fork. `args=` is
+      # space-joined, so a value that itself contains spaces splits into extra
+      # tokens -- those just fail the whitelist in _format_session_cmd and are
+      # dropped, degrading to less information rather than to wrong output.
+      # No with_timeout wrapper: this is a single-pid lookup (and wrapping it
+      # would cost the extra fork this design is avoiding), same call as the
+      # unguarded vm_stat/sysctl in get_mem_usage above.
+      read -r ppid rest < <(ps -o ppid=,args= -p "$pid" 2>/dev/null) || return 0
+      read -r -a cur <<< "$rest"
+    fi
+    [ "${#cur[@]}" -gt 0 ] || return 0
+    arg0="${cur[0]##*/}"
+    # Match on arg0 only. A looser "argv mentions claude" test would match the
+    # intermediate shell that runs this very script (~/.claude/statusline.sh)
+    # and stop the walk one level early on an argv with no session flags.
+    case "$arg0" in
+      claude) _session_argv=("${cur[@]}"); return ;;
+      node|bun|deno)
+        # npm-style install: `node .../@anthropic-ai/claude-code/cli.js ...`
+        case "${cur[*]}" in
+          *claude-code*|*claude/cli.js*) _session_argv=("${cur[@]}"); return ;;
+        esac
+        ;;
+    esac
+    pid="$ppid"
+  done
+}
+
 # ---- cache helpers for ccusage data ----
 CACHE_FILE="$HOME/.claude/stats-cache.json"
 LOCK_DIR="$CACHE_FILE.lock"
@@ -866,6 +1065,19 @@ fi
 mem_pct=""
 if [ "$_compact" -eq 0 ] && [ "${STATUSLINE_SHOW_MEM:-1}" != "0" ]; then
   mem_pct=$(get_mem_usage)
+fi
+
+# ---- session invocation ----
+# Same skip-the-work-not-just-the-render rule as Mem above: the compact layout
+# doesn't render this segment, so the ancestor walk (one `ps` fork on
+# macOS/BSD, zero on Linux) never happens on a narrow terminal either.
+_session_cmd=""
+if [ "$_compact" -eq 0 ] && [ "${STATUSLINE_SHOW_SESSION_CMD:-1}" != "0" ]; then
+  _gather_session_argv
+  if [ "${#_session_argv[@]}" -gt 0 ]; then
+    _format_session_cmd "${_session_argv[@]}"
+    _session_cmd="$REPLY"
+  fi
 fi
 
 # ---- context window calculation ----
@@ -1151,6 +1363,9 @@ else
   fi
   if [ "${STATUSLINE_SHOW_OUTPUT_STYLE:-1}" != "0" ] && [ -n "$output_style" ] && [ "$output_style" != "null" ]; then
     printf '  %s%s%s' "$_style" "$output_style" "$_rst"
+  fi
+  if [ -n "$_session_cmd" ]; then
+    printf '  %s%s %s%s' "$_cmd" "$_icon_session_cmd" "$_session_cmd" "$_rst"
   fi
   if [[ "$mem_pct" =~ ^[0-9]+$ ]]; then
     if [ "$mem_pct" -ge "$_th_mem_crit" ]; then

@@ -1,6 +1,6 @@
 {
   "name": "@ahngbeom/claude-statusline",
-  "version": "1.10.2",
+  "version": "1.11.0",
   "description": "A detailed 3-line statusline for Claude Code CLI",
   "license": "MIT",
   "repository": {

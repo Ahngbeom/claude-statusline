@@ -75,13 +75,22 @@ _tui_rows_snapshot() {
 }
 
 @test "_tui_build_rows: produces one H: row per category and one K: row per key" {
+  # Counts are derived from the two registries rather than hardcoded, so
+  # adding a setting can't leave this test asserting a stale magic number --
+  # and the real invariant (every ALL_KEYS entry is reachable in the TUI, none
+  # duplicated across categories) is what actually gets checked.
+  local expected_headers expected_keys
+  expected_headers=$(grep -c '^  "[^|]*|' <<<"$(_extract 'CATEGORY_DEFS=(' ')')")
+  expected_keys=$(STATUSLINE_CONFIG_FILE="$BATS_TEST_TMPDIR/nonexistent.conf" \
+    bash "$CONFIGURE_SH" list | grep -cE '^(NO_COLOR|STATUSLINE_)')
+
   run _tui_rows_snapshot
   [ "$status" -eq 0 ]
   local headers keys
   headers=$(grep -c '^H:' <<<"$output")
   keys=$(grep -c '^K:' <<<"$output")
-  [ "$headers" -eq 12 ]
-  [ "$keys" -eq 48 ]
+  [ "$headers" -eq "$expected_headers" ]
+  [ "$keys" -eq "$expected_keys" ]
 }
 
 @test "_tui_build_rows: the first row is a header and the second is its first key" {

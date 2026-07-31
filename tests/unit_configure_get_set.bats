@@ -45,6 +45,76 @@ configure_sh() {
   grep -q '^STATUSLINE_SHOW_WEEK=0$' "$STATUSLINE_CONFIG_FILE"
 }
 
+@test "configure: the session-cmd keys round-trip through set/get/unset" {
+  run configure_sh set STATUSLINE_SHOW_SESSION_CMD 0
+  [ "$status" -eq 0 ]
+  # `text` type: a value with spaces has to persist verbatim on one line, so
+  # statusline.sh's IFS='=' read reconstructs the whole command string.
+  run configure_sh set STATUSLINE_SESSION_CMD 'claude -c --permission-mode plan'
+  [ "$status" -eq 0 ]
+  grep -q '^STATUSLINE_SESSION_CMD=claude -c --permission-mode plan$' "$STATUSLINE_CONFIG_FILE"
+  run configure_sh get STATUSLINE_SESSION_CMD
+  [ "$output" = "claude -c --permission-mode plan" ]
+
+  run configure_sh unset STATUSLINE_SESSION_CMD
+  [ "$status" -eq 0 ]
+  run configure_sh get STATUSLINE_SHOW_SESSION_CMD
+  [ "$output" = "0" ]
+}
+
+@test "configure: every color/icon key has a real default, not the catch-all 1" {
+  # _key_default() ends in `*) echo 1`, which is right for the bool SHOW_*
+  # switches but silently swallows a newly added color/icon key -- that
+  # regression shipped once and was only caught by eyeballing `list` output.
+  # Keys are classified off their own description text so this stays correct
+  # as keys are added.
+  run configure_sh list
+  [ "$status" -eq 0 ]
+  while IFS= read -r line; do
+    case "$line" in
+      KEY*|'') continue ;;
+    esac
+    local key value desc
+    key="${line%% *}"
+    value="$(awk '{print $2}' <<<"$line")"
+    desc="${line#*default  }"
+    case "$desc" in
+      "256-color code:"*)
+        [[ "$value" =~ ^[0-9]+$ ]] || { echo "$key default '$value' is not numeric"; return 1; }
+        [ "$value" -ge 0 ] && [ "$value" -le 255 ] \
+          || { echo "$key default '$value' out of 0-255"; return 1; }
+        # 1 is a legal color code but no element actually defaults to it, so it
+        # is the fingerprint of the catch-all leaking through.
+        [ "$value" != "1" ] || { echo "$key default looks like the catch-all"; return 1; }
+        ;;
+      "Icon:"*)
+        [ "$value" != "1" ] && [ "$value" != "0" ] \
+          || { echo "$key icon default looks like the catch-all"; return 1; }
+        ;;
+    esac
+  done <<<"$output"
+}
+
+@test "configure: the new session-cmd keys report their documented defaults" {
+  run configure_sh get STATUSLINE_SHOW_SESSION_CMD
+  [ "$output" = "1" ]
+  run configure_sh get STATUSLINE_COLOR_SESSION_CMD
+  [ "$output" = "245" ]
+  run configure_sh get STATUSLINE_ICON_SESSION_CMD
+  [ "$output" = "⌘" ]
+  run configure_sh get STATUSLINE_SESSION_CMD
+  [ "$output" = "(auto-detected)" ]
+}
+
+@test "configure: list includes every new session-cmd key" {
+  run configure_sh list
+  [ "$status" -eq 0 ]
+  for key in STATUSLINE_SHOW_SESSION_CMD STATUSLINE_SESSION_CMD \
+             STATUSLINE_COLOR_SESSION_CMD STATUSLINE_ICON_SESSION_CMD; do
+    [[ "$output" == *"$key"* ]]
+  done
+}
+
 @test "configure: set on a bool key rejects an invalid value" {
   run configure_sh set STATUSLINE_SHOW_WEEK maybe
   [ "$status" -ne 0 ]

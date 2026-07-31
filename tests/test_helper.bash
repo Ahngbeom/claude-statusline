@@ -21,11 +21,19 @@ load_fn() {
 # NO_COLOR=1 so assertions don't need to match ANSI escape codes. Extra
 # NAME=value arguments (e.g. STATUSLINE_MAX_CONTEXT=1000000) are exported
 # into the subprocess environment.
+#
+# STATUSLINE_SHOW_SESSION_CMD=0 is forced for the same isolation reason: that
+# segment reads the argv of the nearest ancestor `claude` process, so its
+# output depends on how the test suite itself was launched (running bats from
+# inside a Claude Code session finds one; CI does not). Tests that exercise
+# the segment re-enable it explicitly and inject argv via
+# STATUSLINE_SESSION_CMD -- every runner below applies "$@" after these
+# defaults, so a caller-supplied value always wins.
 run_statusline() {
   local json="$1"; shift
   local tmp_home
   tmp_home="$(mktemp -d)"
-  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 STATUSLINE_SHOW_SESSION_CMD=0 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"
@@ -38,7 +46,7 @@ run_statusline_in() {
   local dir="$1" json="$2"; shift 2
   local tmp_home
   tmp_home="$(mktemp -d)"
-  ( cd "$dir" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
+  ( cd "$dir" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 STATUSLINE_SHOW_SESSION_CMD=0 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"
@@ -75,7 +83,7 @@ run_statusline_colored() {
   local json="$1"; shift
   local tmp_home
   tmp_home="$(mktemp -d)"
-  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" env "$@" bash "$STATUSLINE_SH" )
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" STATUSLINE_SHOW_SESSION_CMD=0 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"
@@ -88,7 +96,7 @@ run_statusline_with_cache() {
   local tmp_home
   tmp_home="$(mktemp -d)"
   seed_ccusage_cache "$tmp_home"
-  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 STATUSLINE_SHOW_SESSION_CMD=0 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"
@@ -101,7 +109,7 @@ run_statusline_colored_with_cache() {
   local tmp_home
   tmp_home="$(mktemp -d)"
   seed_ccusage_cache "$tmp_home"
-  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" env "$@" bash "$STATUSLINE_SH" )
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" STATUSLINE_SHOW_SESSION_CMD=0 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"
@@ -125,7 +133,7 @@ run_statusline_with_config() {
   local tmp_home
   tmp_home="$(mktemp -d)"
   seed_config_file "$tmp_home" "$config"
-  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 env "$@" bash "$STATUSLINE_SH" )
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" NO_COLOR=1 STATUSLINE_SHOW_SESSION_CMD=0 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"
@@ -138,7 +146,7 @@ run_statusline_colored_with_config() {
   local tmp_home
   tmp_home="$(mktemp -d)"
   seed_config_file "$tmp_home" "$config"
-  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" env "$@" bash "$STATUSLINE_SH" )
+  ( cd "$tmp_home" && printf '%s' "$json" | HOME="$tmp_home" STATUSLINE_SHOW_SESSION_CMD=0 env "$@" bash "$STATUSLINE_SH" )
   local status=$?
   rm -rf "$tmp_home"
   return "$status"

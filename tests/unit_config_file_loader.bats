@@ -24,6 +24,29 @@ JSON_WITH_VERSION='{"workspace":{"current_dir":"/tmp/proj/myapp"},"model":{"disp
   [[ "$line1" == *"Mem"* ]]
 }
 
+@test "config file: STATUSLINE_SESSION_CMD is applied via the exact-match allowlist" {
+  # A value with spaces has to survive the loader's IFS='=' read intact (the
+  # split is on the first '=' only), and env vars still win over the file --
+  # the suite-wide STATUSLINE_SHOW_SESSION_CMD=0 default is dropped with
+  # `env -u` so the config file is what enables the segment here.
+  run run_statusline_with_config "$JSON" \
+    "STATUSLINE_SHOW_SESSION_CMD=1
+STATUSLINE_SESSION_CMD=claude -c --permission-mode plan" \
+    -u STATUSLINE_SHOW_SESSION_CMD
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"⌘ -c plan"* ]]
+}
+
+@test "config file: an env var wins over a config-file STATUSLINE_SHOW_SESSION_CMD" {
+  run run_statusline_with_config "$JSON" \
+    "STATUSLINE_SHOW_SESSION_CMD=1
+STATUSLINE_SESSION_CMD=claude -c" \
+    STATUSLINE_SHOW_SESSION_CMD=0
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"⌘"* ]]
+}
+
 @test "config file: comment lines and blank lines are ignored, real keys still apply" {
   local config
   config="$(printf '# a comment\n\nSTATUSLINE_SHOW_CC_VERSION=0\n')"
@@ -68,6 +91,16 @@ JSON_WITH_VERSION='{"workspace":{"current_dir":"/tmp/proj/myapp"},"model":{"disp
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
   [[ "$line1" == 🚀* ]]
+}
+
+@test "config file: the new SESSION_CMD color/icon keys ride the existing prefix-glob arms" {
+  run run_statusline_colored_with_config "$JSON" \
+    "STATUSLINE_SESSION_CMD=claude -c
+STATUSLINE_COLOR_SESSION_CMD=196
+STATUSLINE_ICON_SESSION_CMD=%" \
+    -u STATUSLINE_SHOW_SESSION_CMD
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'\033[38;5;196m% -c'* ]]
 }
 
 @test "config file: STATUSLINE_SEP_CHAR is applied via the allowlist" {
