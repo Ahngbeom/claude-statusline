@@ -1,8 +1,12 @@
 #!/usr/bin/env bats
 #
 # bin/git-mr against fake glab/gh binaries (first on PATH) that answer from
-# fixture files and log every call, in a throwaway repo with a fake remote.
+# fixture files (applying gh's -q filter) and log every call, in a throwaway repo with a fake remote.
 # XDG_CACHE_HOME isolates the record cache.
+#
+# Fixtures: glab project lookup -> project.json, MR list of project N ->
+# list.N.json, MR detail -> mr.json; gh repo view -> repo.json, PR list of
+# HOST/OWNER/REPO -> prs.HOST_OWNER_REPO.json. Missing lists answer [].
 
 load 'test_helper'
 
@@ -11,19 +15,28 @@ GIT_MR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/bin/git-mr"
 setup() {
   T="$BATS_TEST_TMPDIR"
   mkdir -p "$T/bin"
-  for tool in glab gh; do
-    cat >"$T/bin/$tool" <<EOF
+  cat >"$T/bin/glab" <<EOF
 #!/bin/bash
-echo "\$*" >>"$T/$tool.log"
-[ -f "$T/$tool.rc" ] && exit "\$(cat "$T/$tool.rc")"
-case "\$*" in
-  *"merge_requests?"*) cat "$T/list.json" ;;
-  *merge_requests/*)   cat "$T/mr.json" ;;
-  *)                   cat "$T/gh.json" ;;
+echo "\$*" >>"$T/glab.log"
+[ -f "$T/glab.rc" ] && exit "\$(cat "$T/glab.rc")"
+url=\${!#}
+case "\$url" in
+  */merge_requests\?*) p=\${url#projects/}; cat "$T/list.\${p%%/*}.json" 2>/dev/null || echo '[]' ;;
+  */merge_requests/*)  cat "$T/mr.json" ;;
+  projects/*)          cat "$T/project.json" ;;
 esac
 EOF
-    chmod +x "$T/bin/$tool"
-  done
+  cat >"$T/bin/gh" <<EOF
+#!/bin/bash
+echo "\$*" >>"$T/gh.log"
+case "\$*" in
+  "repo view"*) jq -r "\${!#}" "$T/repo.json" ;;
+  "pr list -R "*) r=\${4//\//_}; cat "$T/prs.\$r.json" 2>/dev/null || echo '[]' ;;
+esac
+EOF
+  chmod +x "$T/bin/glab" "$T/bin/gh"
+  echo '{"id":5,"forked_from_project":null}' >"$T/project.json"
+  echo '{"parent":null}' >"$T/repo.json"
   git init --quiet -b feat/x "$T/repo"
   git -C "$T/repo" remote add origin https://git.example.com/grp/sub/proj.git
   git -C "$T/repo" config user.email "test@example.com"
@@ -32,7 +45,7 @@ EOF
 }
 
 gitlab_mr() {
-  echo '[{"iid":7}]' >"$T/list.json"
+  echo '[{"iid":7,"source_project_id":5}]' >"$T/list.5.json"
   jq -n --argjson extra "$1" '{iid:7, web_url:"https://git.example.com/grp/sub/proj/-/merge_requests/7", draft:false,
     detailed_merge_status:"mergeable", has_conflicts:false,
     head_pipeline:{status:"success", web_url:"https://git.example.com/grp/sub/proj/-/pipelines/3"}} + $extra' >"$T/mr.json"
@@ -45,7 +58,8 @@ record() { "$GIT_MR" --refresh "$T/repo"; }
   run record
   [ "$status" -eq 0 ]
   [ "$output" = $'mr\t7\thttps://git.example.com/grp/sub/proj/-/merge_requests/7\tok\tsuccess\thttps://git.example.com/grp/sub/proj/-/pipelines/3' ]
-  grep -q 'projects/grp%2Fsub%2Fproj/merge_requests?state=opened&source_branch=feat%2Fx' "$T/glab.log"
+  grep -q 'projects/grp%2Fsub%2Fproj$' "$T/glab.log"
+  grep -q 'projects/5/merge_requests?state=opened&source_branch=feat%2Fx' "$T/glab.log"
   grep -q -- '--hostname git.example.com' "$T/glab.log"
 }
 
@@ -59,7 +73,7 @@ record() { "$GIT_MR" --refresh "$T/repo"; }
 }
 
 @test "git-mr: no open MR gives an empty record, and git mr says so" {
-  echo '[]' >"$T/list.json"
+  echo '[]' >"$T/list.5.json"
   run record
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -71,7 +85,7 @@ record() { "$GIT_MR" --refresh "$T/repo"; }
 
 @test "git-mr: GitHub remote goes through gh; review and checks are rolled up" {
   git -C "$T/repo" remote set-url origin git@github.com:o/r.git
-  echo '[{"number":12,"url":"https://github.com/o/r/pull/12","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS"},{"conclusion":"FAILURE"}]}]' >"$T/gh.json"
+  echo '[{"number":12,"url":"https://github.com/o/r/pull/12","isDraft":false,"reviewDecision":"APPROVED","headRepositoryOwner":{"login":"o"},"statusCheckRollup":[{"conclusion":"SUCCESS"},{"conclusion":"FAILURE"}]}]' >"$T/prs.github.com_o_r.json"
   run record
   [ "$output" = $'pr\t12\thttps://github.com/o/r/pull/12\tok\tfailed\thttps://github.com/o/r/pull/12/checks' ]
   grep -q -- '-R github.com/o/r --head feat/x --state open' "$T/gh.log"
@@ -118,4 +132,23 @@ record() { "$GIT_MR" --refresh "$T/repo"; }
   run "$GIT_MR" --cached "$T"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+@test "git-mr: a GitLab fork's MR is found in the upstream project" {
+  echo '{"id":5,"forked_from_project":{"id":1}}' >"$T/project.json"
+  echo '[{"iid":3,"source_project_id":99},{"iid":9,"source_project_id":5}]' >"$T/list.1.json"
+  gitlab_mr '{"iid":9}'
+  rm -f "$T/list.5.json"
+  run record
+  [ "$(cut -f2 <<<"$output")" = 9 ]
+  grep -q 'projects/1/merge_requests/9$' "$T/glab.log"
+}
+
+@test "git-mr: a GitHub fork's PR is found in the parent repo, ignoring other forks' same-named branches" {
+  git -C "$T/repo" remote set-url origin https://github.com/Me/r.git
+  echo '{"parent":{"owner":{"login":"up"},"name":"r"}}' >"$T/repo.json"
+  echo '[{"number":40,"url":"https://github.com/up/r/pull/40","isDraft":false,"reviewDecision":"","headRepositoryOwner":{"login":"someone"},"statusCheckRollup":[]},
+         {"number":41,"url":"https://github.com/up/r/pull/41","isDraft":false,"reviewDecision":"","headRepositoryOwner":{"login":"me"},"statusCheckRollup":[]}]' >"$T/prs.github.com_up_r.json"
+  run record
+  [ "$output" = $'pr\t41\thttps://github.com/up/r/pull/41\tpending\t\thttps://github.com/up/r/pull/41/checks' ]
 }

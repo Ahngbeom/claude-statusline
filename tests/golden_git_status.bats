@@ -162,6 +162,20 @@ EOF
   rm -rf "$base"
 }
 
+@test "golden: detail mode counts a new untracked directory once, like git status" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  mkdir "$base/work/newdir"
+  touch "$base/work/newdir/a" "$base/work/newdir/b" "$base/work/newdir/c" "$base/work/top.txt"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main ?2  │"* ]]
+
+  rm -rf "$base"
+}
+
 @test "golden: detail mode keeps ahead/behind before the counts" {
   base="$(mktemp -d)"
   setup_repo_with_upstream "$base"

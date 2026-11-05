@@ -418,7 +418,7 @@ main ↑1↓2 +2 ~1 ?3 !1 $1 REBASE
 | Mark | Meaning / 의미 |
 |------|----------------|
 | `↑N` `↓N` | ahead / behind upstream |
-| `+N` `~N` `?N` `!N` | staged / modified / untracked / conflicted files |
+| `+N` `~N` `?N` `!N` | staged / modified / untracked / conflicted entries, counted the way `git status` lists them: a new untracked directory is one entry, and `status.showUntrackedFiles` is honored / `git status`가 보여 주는 항목 기준 (새 untracked 디렉터리는 1개, `status.showUntrackedFiles` 설정을 따름) |
 | `$N` | stash entries |
 | `REBASE` `MERGE` `CHERRY-PICK` `REVERT` `BISECT` | operation in progress / 진행 중인 작업 |
 
@@ -458,6 +458,7 @@ Claude Code의 `pr`에는 CI 상태가 없습니다. `git-mr`이 PATH에 있으�
   curl -fsSL https://raw.githubusercontent.com/ahngbeom/claude-statusline/main/bin/git-mr -o ~/.local/bin/git-mr
   chmod +x ~/.local/bin/git-mr
   ```
+- Fork workflows work too: the MR/PR is looked up in the upstream project/repo first. / fork에서 올린 MR/PR은 원본 프로젝트에서 먼저 찾습니다.
 - It is also a git subcommand / git 서브커맨드로도 쓸 수 있습니다: `git mr` (summary + link), `git mr --open`,
   `git mr --url`, `git mr --help`.
 
