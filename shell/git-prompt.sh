@@ -10,6 +10,7 @@ for __gp in \
   /Library/Developer/CommandLineTools/usr/share/git-core/git-prompt.sh \
   /Applications/Xcode.app/Contents/Developer/usr/share/git-core/git-prompt.sh
 do
+  # shellcheck source=/dev/null
   [ -r "$__gp" ] && { . "$__gp"; break; }
 done
 unset __gp

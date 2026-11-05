@@ -26,6 +26,8 @@ EOF
   done
   git init --quiet -b feat/x "$T/repo"
   git -C "$T/repo" remote add origin https://git.example.com/grp/sub/proj.git
+  git -C "$T/repo" config user.email "test@example.com"
+  git -C "$T/repo" config user.name "Test"
   export XDG_CACHE_HOME="$T/cache" PATH="$T/bin:$PATH"
 }
 
