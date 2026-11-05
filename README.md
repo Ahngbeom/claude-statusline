@@ -82,7 +82,10 @@ chmod +x ~/.claude/statusline.sh ~/.claude/configure.sh
 Edit `~/.claude/settings.json`:
 ```json
 {
-  "statusline": "~/.claude/statusline.sh"
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  }
 }
 ```
 

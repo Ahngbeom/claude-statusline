@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.11.0
+# Version: 1.11.1
 # License: MIT
 #
 # Features:
@@ -357,6 +357,17 @@
 #     hatch for wrapper/multiplexer process chains the ancestor walk can't
 #     reach; it feeds the same whitelist, so it is not a way to print
 #     arbitrary text), STATUSLINE_COLOR_SESSION_CMD, STATUSLINE_ICON_SESSION_CMD.
+#
+# Changes (v1.11.1):
+#   - install.sh / npm postinstall now register the script the way Claude Code
+#     reads it: "statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}.
+#     Every earlier version wrote "statusline": "<path>" (lowercase, string),
+#     which Claude Code ignores, so a fresh install never showed the
+#     statusline. Reinstalling migrates that key and keeps padding /
+#     refreshInterval already set under statusLine.
+#   - An existing ~/.claude/statusline.sh that claude-statusline did not
+#     install is saved as statusline.sh.backup-<timestamp> before replacement;
+#     uninstall leaves such a script (and the statusLine running it) in place.
 
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.

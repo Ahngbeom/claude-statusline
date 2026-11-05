@@ -9,6 +9,9 @@ CONFIGURE_FILE="$CLAUDE_DIR/configure.sh"
 CACHE_FILE="$CLAUDE_DIR/stats-cache.json"
 RATE_LIMITS_CACHE_FILE="$CLAUDE_DIR/rate-limits-cache.json"
 CONFIG_FILE="$CLAUDE_DIR/statusline.conf"
+# shellcheck disable=SC2088 # literal ~ on purpose: Claude Code expands it
+STATUSLINE_CMD="~/.claude/statusline.sh"
+KEEP_STATUSLINE_SETTING=""
 
 # Colors
 GREEN='\033[0;32m'
@@ -41,7 +44,10 @@ print_warning() {
 remove_statusline() {
   print_step "Removing statusline.sh..."
 
-  if [ -f "$STATUSLINE_FILE" ]; then
+  if [ -f "$STATUSLINE_FILE" ] && ! head -n 2 "$STATUSLINE_FILE" | grep -q '^# claude-statusline - '; then
+    KEEP_STATUSLINE_SETTING=1
+    print_warning "Kept $STATUSLINE_FILE (not installed by claude-statusline)"
+  elif [ -f "$STATUSLINE_FILE" ]; then
     rm "$STATUSLINE_FILE"
     print_success "Removed $STATUSLINE_FILE"
   else
@@ -88,17 +94,18 @@ update_settings() {
 
   if [ -f "$SETTINGS_FILE" ]; then
     if command -v jq &>/dev/null; then
-      # Remove statusline setting
       trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
-      if jq 'del(.statusline)' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" 2>/dev/null; then
+      if jq --arg cmd "$STATUSLINE_CMD" --arg abs "$STATUSLINE_FILE" --arg keep "$KEEP_STATUSLINE_SETTING" \
+        'del(.statusline) | if $keep == "" and (.statusLine | type) == "object" and (.statusLine.command == $cmd or .statusLine.command == $abs) then del(.statusLine) else . end' \
+        "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" 2>/dev/null; then
         mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
         print_success "Removed statusline setting from $SETTINGS_FILE"
       else
         rm -f "$SETTINGS_FILE.tmp"
-        print_warning "Failed to update $SETTINGS_FILE - please manually remove 'statusline' key"
+        print_warning "Failed to update $SETTINGS_FILE - please manually remove the 'statusLine' key"
       fi
     else
-      print_warning "jq not found, please manually remove 'statusline' from $SETTINGS_FILE"
+      print_warning "jq not found, please manually remove 'statusLine' from $SETTINGS_FILE"
     fi
   else
     print_warning "Settings file not found"

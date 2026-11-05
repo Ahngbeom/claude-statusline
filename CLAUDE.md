@@ -172,10 +172,10 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 
 ### 파일 역할
 
-- **statusline.sh**: 메인 스크립트. `~/.claude/settings.json`에 `"statusline": "~/.claude/statusline.sh"` 형태로 등록. stdout 렌더링과 별개로, stdin에 `rate_limits`가 있으면 `~/.claude/rate-limits-cache.json`에도 그대로 옮겨 쓴다(cc-menutor 등 외부 도구용 side-channel). 시작 시 `~/.claude/statusline.conf`(사용자 설정 파일, 아래 참고)도 읽는다
+- **statusline.sh**: 메인 스크립트. `~/.claude/settings.json`에 `"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}` 형태로 등록 (소문자 `"statusline"` 문자열 키는 Claude Code가 읽지 않는다). stdout 렌더링과 별개로, stdin에 `rate_limits`가 있으면 `~/.claude/rate-limits-cache.json`에도 그대로 옮겨 쓴다(cc-menutor 등 외부 도구용 side-channel). 시작 시 `~/.claude/statusline.conf`(사용자 설정 파일, 아래 참고)도 읽는다
 - **configure.sh**: `statusline.sh`와 나란히 설치되는 독립 CLI/TUI. `~/.claude/statusline.conf`를 읽고 쓴다 (`list`/`get`/`set`/`unset`/`reset`/`path`/`preview` 서브커맨드, 인자 없이 실행하면 대화형 메뉴). 외부 의존성 없는 순수 bash
-- **install.sh**: 원라이너 설치 (`curl | bash`). 의존성 확인 → GitHub에서 statusline.sh + configure.sh 다운로드 → settings.json에 statusline 필드 추가. 기존 settings.json이 있으면 `.backup` 생성
-- **uninstall.sh**: `~/.claude/statusline.sh`, `~/.claude/configure.sh`, `~/.claude/stats-cache.json`, `~/.claude/rate-limits-cache.json`, `~/.claude/statusline.conf` 삭제, settings.json에서 statusline 필드 제거
+- **install.sh**: 원라이너 설치 (`curl | bash`). 의존성 확인 → GitHub에서 statusline.sh + configure.sh 다운로드 → settings.json의 `statusLine` 객체(`type`/`command`) 설정. `padding`/`refreshInterval` 등 기존 `statusLine` 필드는 유지하고, 1.11.1 이전 설치기가 쓰던 소문자 `statusline` 키는 지운다. 기존 settings.json이 있으면 `.backup` 생성. 기존 `~/.claude/statusline.sh`의 2번째 줄이 `# claude-statusline - `로 시작하지 않으면(사용자 스크립트) `statusline.sh.backup-<timestamp>`로 보존한 뒤 교체
+- **uninstall.sh**: `~/.claude/statusline.sh`, `~/.claude/configure.sh`, `~/.claude/stats-cache.json`, `~/.claude/rate-limits-cache.json`, `~/.claude/statusline.conf` 삭제, settings.json에서 이 스크립트를 가리키는 `statusLine`과 소문자 `statusline` 키 제거. `statusline.sh`가 claude-statusline 것이 아니면 파일과 `statusLine` 둘 다 남긴다
 - **scripts/postinstall.sh**: npm `postinstall` 훅. `npm install`로 패키지 설치 시 install.sh와 동일한 역할 수행 (statusline.sh + configure.sh 복사 + settings.json 등록)
 - **scripts/preuninstall.sh**: npm `preuninstall` 훅. `npm uninstall`로 패키지 제거 시 uninstall.sh와 동일한 역할 수행
 
