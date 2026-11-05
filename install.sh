@@ -9,6 +9,8 @@ CLAUDE_DIR="$HOME/.claude"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 STATUSLINE_FILE="$CLAUDE_DIR/statusline.sh"
 CONFIGURE_FILE="$CLAUDE_DIR/configure.sh"
+# shellcheck disable=SC2088 # literal ~ on purpose: Claude Code expands it
+STATUSLINE_CMD="~/.claude/statusline.sh"
 
 # Colors
 RED='\033[0;31m'
@@ -86,12 +88,28 @@ create_claude_dir() {
   fi
 }
 
+backup_foreign_statusline() {
+  [ -f "$STATUSLINE_FILE" ] || return 0
+  head -n 2 "$STATUSLINE_FILE" | grep -q '^# claude-statusline - ' && return 0
+  local backup
+  backup="$STATUSLINE_FILE.backup-$(date +%Y%m%d-%H%M%S)"
+  cp -p "$STATUSLINE_FILE" "$backup"
+  print_warning "Existing $STATUSLINE_FILE was not installed by claude-statusline; saved it as $backup"
+}
+
 # Download statusline.sh
 download_statusline() {
   print_step "Downloading statusline.sh..."
 
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/main/statusline.sh" \
-    -o "$STATUSLINE_FILE"
+  local tmp
+  tmp=$(mktemp "$STATUSLINE_FILE.XXXXXX")
+  if ! curl -fsSL "https://raw.githubusercontent.com/$REPO/main/statusline.sh" -o "$tmp"; then
+    rm -f "$tmp"
+    print_error "Failed to download statusline.sh"
+    exit 1
+  fi
+  backup_foreign_statusline
+  mv "$tmp" "$STATUSLINE_FILE"
   chmod +x "$STATUSLINE_FILE"
 
   print_success "Downloaded to $STATUSLINE_FILE"
@@ -116,16 +134,16 @@ update_settings() {
     # Backup existing settings
     cp "$SETTINGS_FILE" "$SETTINGS_FILE.backup"
 
-    # Add or update statusline setting
+    # Claude Code reads only statusLine; the lowercase statusline key is a dead legacy entry.
     trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
-    jq '.statusline = "~/.claude/statusline.sh"' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp"
+    jq --arg cmd "$STATUSLINE_CMD" 'del(.statusline) | .statusLine = ((if (.statusLine | type) == "object" then .statusLine else {} end) + {type: "command", command: $cmd})' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp"
     mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
 
     print_success "Updated $SETTINGS_FILE"
     print_success "Backup saved to $SETTINGS_FILE.backup"
   else
     # Create new settings file
-    echo '{"statusline": "~/.claude/statusline.sh"}' | jq '.' > "$SETTINGS_FILE"
+    jq -n --arg cmd "$STATUSLINE_CMD" '{statusLine: {type: "command", command: $cmd}}' > "$SETTINGS_FILE"
     print_success "Created $SETTINGS_FILE"
   fi
 }

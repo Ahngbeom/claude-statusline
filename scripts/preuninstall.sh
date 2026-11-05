@@ -9,9 +9,15 @@ CONFIGURE_FILE="$CLAUDE_DIR/configure.sh"
 CACHE_FILE="$CLAUDE_DIR/stats-cache.json"
 RATE_LIMITS_CACHE_FILE="$CLAUDE_DIR/rate-limits-cache.json"
 CONFIG_FILE="$CLAUDE_DIR/statusline.conf"
+# shellcheck disable=SC2088 # literal ~ on purpose: Claude Code expands it
+STATUSLINE_CMD="~/.claude/statusline.sh"
+KEEP_STATUSLINE_SETTING=""
 
-# Remove statusline.sh
-if [ -f "$STATUSLINE_FILE" ]; then
+# Remove statusline.sh, unless it is the user's own script
+if [ -f "$STATUSLINE_FILE" ] && ! head -n 2 "$STATUSLINE_FILE" | grep -q '^# claude-statusline - '; then
+  KEEP_STATUSLINE_SETTING=1
+  echo "claude-statusline: kept $STATUSLINE_FILE (not installed by claude-statusline)"
+elif [ -f "$STATUSLINE_FILE" ]; then
   rm "$STATUSLINE_FILE"
   echo "claude-statusline: removed $STATUSLINE_FILE"
 else
@@ -44,7 +50,9 @@ fi
 if [ -f "$SETTINGS_FILE" ]; then
   if command -v jq &>/dev/null; then
     trap 'rm -f "$SETTINGS_FILE.tmp"' EXIT
-    if jq 'del(.statusline)' "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" 2>/dev/null; then
+    if jq --arg cmd "$STATUSLINE_CMD" --arg abs "$STATUSLINE_FILE" --arg keep "$KEEP_STATUSLINE_SETTING" \
+      'del(.statusline) | if $keep == "" and (.statusLine | type) == "object" and (.statusLine.command == $cmd or .statusLine.command == $abs) then del(.statusLine) else . end' \
+      "$SETTINGS_FILE" > "$SETTINGS_FILE.tmp" 2>/dev/null; then
       mv "$SETTINGS_FILE.tmp" "$SETTINGS_FILE"
       echo "claude-statusline: cleaned $SETTINGS_FILE"
     else
@@ -52,7 +60,7 @@ if [ -f "$SETTINGS_FILE" ]; then
       echo "claude-statusline: WARNING - failed to update $SETTINGS_FILE"
     fi
   else
-    echo "claude-statusline: WARNING - jq not found, please manually remove 'statusline' from $SETTINGS_FILE"
+    echo "claude-statusline: WARNING - jq not found, please manually remove 'statusLine' from $SETTINGS_FILE"
   fi
 fi
 
