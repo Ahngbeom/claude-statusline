@@ -17,7 +17,7 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 
 | Line | Content / 내용 |
 |------|----------------|
-| 1 | 📂 Directory + Git branch (dirty `*`, ahead/behind `↑↓`) │ Model, CLI version, Output style, ⌘ Session launch flags │ 💻 Memory |
+| 1 | 📂 Directory + Git branch (dirty `*`, ahead/behind `↑↓`, optional counts) + PR/MR `!289 ✔` (clickable) │ Model, CLI version, Output style, ⌘ Session launch flags │ 💻 Memory |
 | 2 | 🧠 Context usage (bar) │ Session time + tokens + cost │ 🗄 Cache + Speed |
 | 3 | 💰 Today │ Week │ Month usage & costs |
 
@@ -282,6 +282,8 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 |----------|-------|
 | `STATUSLINE_SHOW_GIT=0` | Line 1 git branch segment entirely / Line 1 git 브랜치 세그먼트 전체 |
 | `STATUSLINE_SHOW_GIT_STATUS=0` | Only the dirty(`*`)/ahead-behind(`↑↓`) markers (branch name stays) / dirty·ahead-behind 표시만 (브랜치명은 유지) |
+| `STATUSLINE_SHOW_PR=0` | Line 1 PR/MR number and pipeline mark / Line 1 PR/MR 번호와 파이프라인 표시 |
+| `STATUSLINE_HYPERLINKS=0` | Only the links on the PR/MR number and pipeline mark (text stays) / PR/MR·파이프라인 링크만 (글자는 유지) |
 | `STATUSLINE_SHOW_CC_VERSION=0` | Line 1 CLI version (`v1.0.44`) |
 | `STATUSLINE_SHOW_OUTPUT_STYLE=0` | Line 1 output style |
 | `STATUSLINE_SHOW_MEM=0` | Line 1 `💻 Mem NN%` |
@@ -292,6 +294,10 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 | `STATUSLINE_SHOW_TODAY=0` | Line 3 Today |
 | `STATUSLINE_SHOW_WEEK=0` | Line 3 Week |
 | `STATUSLINE_SHOW_MONTH=0` | Line 3 Month |
+
+`STATUSLINE_SHOW_GIT_DETAIL` is the one opt-in toggle (default `0`) — see "Git Detail & PR/MR" below.
+
+`STATUSLINE_SHOW_GIT_DETAIL`만 기본값이 `0`(꺼짐)인 opt-in 토글입니다 — 아래 "Git 상세·PR/MR" 참고.
 
 ### Color Customization / 색상 커스터마이징
 
@@ -321,6 +327,7 @@ regardless of these.
 | `STATUSLINE_COLOR_CTX_OK` / `_WARN` / `_CRIT` | 158 / 215 / 203 | Context bar, 3-tier by remaining % (see `STATUSLINE_THRESHOLD_CTX_*` below) |
 | `STATUSLINE_COLOR_SESSION_OK` / `_WARN` / `_CRIT` | 194 / 228 / 210 | Session segment, 3-tier by remaining % |
 | `STATUSLINE_COLOR_MEM_OK` / `_WARN` / `_CRIT` | 120 / 220 / 196 | Line 1 Mem indicator, 3-tier by used % |
+| `STATUSLINE_COLOR_PR_OK` / `_WARN` / `_CRIT` / `_DRAFT` | 114 / 221 / 203 / 245 | PR/MR number by review state (approved / pending / changes requested / draft) and pipeline mark (passed / running / failed / canceled) |
 
 ### Icon Customization / 아이콘 커스터마이징
 
@@ -396,6 +403,77 @@ Linux는 서브프로세스 0개(`/proc/<pid>/cmdline`), macOS/BSD는 통상 `ps
 2. 래퍼·멀티플렉서·셸 함수가 Claude Code와 statusline 스크립트 사이에 3단계 넘게 끼어 있으면 자동 감지가
    실패해 세그먼트가 비어 있게 됩니다. 이 경우 `STATUSLINE_SESSION_CMD`(환경변수 또는 `configure.sh set`)에
    파싱할 명령어 문자열을 직접 지정하세요 — 위와 완전히 동일한 화이트리스트를 통과합니다.
+
+### Git Detail & PR/MR / Git 상세·PR/MR
+
+**Git detail** — `STATUSLINE_SHOW_GIT_DETAIL=1` replaces the `*` marker with counts (full layout only;
+compact mode keeps `*`):
+
+`STATUSLINE_SHOW_GIT_DETAIL=1`이면 `*` 대신 개수를 표시합니다 (전체 레이아웃만, 축약 모드는 `*` 유지):
+
+```
+main ↑1↓2 +2 ~1 ?3 !1 $1 REBASE
+```
+
+| Mark | Meaning / 의미 |
+|------|----------------|
+| `↑N` `↓N` | ahead / behind upstream |
+| `+N` `~N` `?N` `!N` | staged / modified / untracked / conflicted files |
+| `$N` | stash entries |
+| `REBASE` `MERGE` `CHERRY-PICK` `REVERT` `BISECT` | operation in progress / 진행 중인 작업 |
+
+**PR/MR** — when the current branch has an open pull request (GitHub) or merge request (GitLab,
+including self-managed), Line 1 shows its number right after the branch: `#12` / `!289`. The data is the
+`pr` object Claude Code itself passes to the statusline (the same lookup as its footer badge), so it needs
+what that badge needs: `gh auth login` for GitHub, and Claude Code v2.1.234+ with `glab auth login` for
+GitLab. The color follows the review state (`STATUSLINE_COLOR_PR_*`), and `draft` is spelled out.
+
+현재 브랜치에 열린 PR(GitHub)이나 MR(GitLab, self-managed 포함)이 있으면 브랜치 뒤에 번호가
+표시됩니다(`#12` / `!289`). 데이터는 Claude Code가 statusline에 넘겨 주는 `pr` 객체(하단 배지와 같은 조회
+결과)라서, GitHub는 `gh auth login`, GitLab은 Claude Code v2.1.234 이상 + `glab auth login`이 필요합니다.
+색상은 리뷰 상태를 따릅니다.
+
+**Clickable links** — the number (and the pipeline mark) are [OSC 8](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda)
+hyperlinks: Cmd+click (macOS) / Ctrl+click opens them in the browser. Works in iTerm2, WezTerm, Kitty,
+VS Code's terminal; Terminal.app shows plain text. Inside tmux add
+`set -as terminal-features ",*:hyperlinks"` to `~/.tmux.conf`. `STATUSLINE_HYPERLINKS=0` turns links off.
+
+번호와 파이프라인 표시는 OSC 8 링크라 Cmd+클릭(macOS)/Ctrl+클릭으로 브라우저에서 열립니다. iTerm2,
+WezTerm, Kitty, VS Code 터미널에서 동작하고 Terminal.app은 글자만 보입니다. tmux 안에서는
+`~/.tmux.conf`에 위 설정을 추가하세요.
+
+**Pipeline mark via `git-mr`** — Claude Code's `pr` object has no CI state. If `git-mr` (shipped in
+`bin/`) is on `PATH`, the segment also shows the pipeline: `✔` passed, `✘` failed, `●` running, `⊘`
+canceled, linked to the pipeline page. `git-mr` needs `jq` plus a logged-in `glab` (GitLab) or `gh`
+(GitHub). The statusline only reads its cache; a stale entry (default 120 s, `GIT_MR_TTL`) is refreshed in
+the background, so a render never waits on the network.
+
+Claude Code의 `pr`에는 CI 상태가 없습니다. `git-mr`이 PATH에 있으면 파이프라인 표시(✔ 성공, ✘ 실패,
+● 실행 중, ⊘ 취소)가 붙고 파이프라인 페이지로 링크됩니다. statusline은 캐시만 읽고, 오래된 캐시(기본
+120초)는 백그라운드에서 갱신하므로 렌더가 네트워크를 기다리지 않습니다.
+
+- npm install puts `git-mr` on `PATH` automatically. / npm 설치 시 자동으로 PATH에 등록됩니다.
+- Otherwise / 그 외:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/ahngbeom/claude-statusline/main/bin/git-mr -o ~/.local/bin/git-mr
+  chmod +x ~/.local/bin/git-mr
+  ```
+- It is also a git subcommand / git 서브커맨드로도 쓸 수 있습니다: `git mr` (summary + link), `git mr --open`,
+  `git mr --url`, `git mr --help`.
+
+**Shell prompt** — `shell/git-prompt.sh` adds the branch status and the same PR/MR segment to a bash or
+zsh prompt, using git's own `__git_ps1`. Source it from `~/.bashrc` / `~/.zshrc`
+(`GIT_PROMPT_MR=0` hides the PR/MR part):
+
+`shell/git-prompt.sh`를 `~/.bashrc`/`~/.zshrc`에서 source하면 셸 프롬프트에도 브랜치 상태와 같은
+PR/MR 표시가 나옵니다:
+
+```bash
+[ -f ~/.config/shell/git-prompt.sh ] && . ~/.config/shell/git-prompt.sh
+```
+```
+dev@host:~/repo (main *+%=) !289 ✔$
+```
 
 ### Threshold Customization / 임계값 커스터마이징
 
@@ -566,5 +644,5 @@ Issues and pull requests are welcome!
 bats tests/
 
 # Requires shellcheck: brew install shellcheck
-shellcheck statusline.sh configure.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
+shellcheck statusline.sh configure.sh install.sh uninstall.sh scripts/*.sh bin/git-mr shell/git-prompt.sh tests/test_helper.bash
 ```

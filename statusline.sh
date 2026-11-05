@@ -1,11 +1,12 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.11.1
+# Version: 1.12.0
 # License: MIT
 #
 # Features:
-#   Line 1: Directory + Git branch (dirty */ahead-behind ↑↓) │ Model, CLI version, Output style,
+#   Line 1: Directory + Git branch (dirty */ahead-behind ↑↓, opt-in counts) + PR/MR !N/#N
+#           (clickable, pipeline mark via bin/git-mr) │ Model, CLI version, Output style,
 #           session launch flags (⌘ -c / plan / bypass ...)
 #   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed
 #   Line 3: Daily │ Weekly │ Monthly usage and costs
@@ -28,6 +29,10 @@
 #   STATUSLINE_CONFIG_FILE=<path> Override the ~/.claude/statusline.conf path
 #   STATUSLINE_SHOW_GIT=1/0          Line 1 git branch segment (default 1)
 #   STATUSLINE_SHOW_GIT_STATUS=1/0   Dirty(*)/ahead-behind(↑↓) markers only (default 1)
+#   STATUSLINE_SHOW_GIT_DETAIL=1/0   +staged ~modified ?untracked !conflict $stash and
+#                                    REBASE/MERGE/... instead of * (default 0, full layout only)
+#   STATUSLINE_SHOW_PR=1/0           Line 1 open PR/MR from stdin .pr (default 1)
+#   STATUSLINE_HYPERLINKS=1/0        OSC 8 links on the PR/MR number and pipeline mark (default 1)
 #   STATUSLINE_SHOW_CC_VERSION=1/0   Line 1 CLI version (default 1)
 #   STATUSLINE_SHOW_OUTPUT_STYLE=1/0 Line 1 output style (default 1)
 #   STATUSLINE_SHOW_MEM=1/0          Line 1 memory indicator (default 1)
@@ -47,6 +52,7 @@
 #   STATUSLINE_COLOR_CTX_OK/_WARN/_CRIT=<0-255>       Context bar 3-tier colors
 #   STATUSLINE_COLOR_SESSION_OK/_WARN/_CRIT=<0-255>   Session 3-tier colors
 #   STATUSLINE_COLOR_MEM_OK/_WARN/_CRIT=<0-255>       Mem indicator 3-tier colors
+#   STATUSLINE_COLOR_PR_OK/_WARN/_CRIT/_DRAFT=<0-255> PR/MR review state + pipeline colors
 #   STATUSLINE_ICON_DIR/_CONTEXT/_COST/_CACHE/_MEM=<str> Per-element icon override
 #   STATUSLINE_THRESHOLD_CTX_WARN/_CRIT=<0-100>       Context remaining % cutoffs (default 40/20)
 #   STATUSLINE_THRESHOLD_MEM_WARN/_CRIT=<0-100>       Memory used % cutoffs (default 60/80)
@@ -368,6 +374,22 @@
 #   - An existing ~/.claude/statusline.sh that claude-statusline did not
 #     install is saved as statusline.sh.backup-<timestamp> before replacement;
 #     uninstall leaves such a script (and the statusLine running it) in place.
+#
+# Changes (v1.12.0):
+#   - Git: one `git --no-optional-locks status --porcelain=v2 --branch
+#     --show-stash` replaces four git calls, and no longer takes index.lock
+#     while Claude Code runs git. Output is unchanged by default except a
+#     detached HEAD, which now shows the short hash instead of nothing.
+#   - STATUSLINE_SHOW_GIT_DETAIL=1 (off by default, full layout only) shows
+#     "main ↑1 +2 ~1 ?3 !1 $1 REBASE" instead of "main* ↑1".
+#   - PR/MR segment after the branch: "!289" (GitLab MR) / "#12" (GitHub PR)
+#     from the stdin `pr` object, colored by review state, OSC 8 linked.
+#     A git-mr on PATH adds the pipeline mark (✔ ✘ ● ⊘) from its cache.
+#   - bin/git-mr (npm bin) looks up the branch's MR/PR via glab/gh with a
+#     background-refreshed cache; shell/git-prompt.sh puts the same segment
+#     in a bash/zsh prompt. New keys: STATUSLINE_SHOW_GIT_DETAIL,
+#     STATUSLINE_SHOW_PR, STATUSLINE_HYPERLINKS, STATUSLINE_COLOR_PR_OK/
+#     _WARN/_CRIT/_DRAFT.
 
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
@@ -389,13 +411,13 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
     case "$_cfg_key" in
       \#*) continue ;;
       NO_COLOR|STATUSLINE_UNICODE|STATUSLINE_HIDE_COST|STATUSLINE_COMPACT|STATUSLINE_COMPACT_WIDTH|STATUSLINE_MAX_CONTEXT|\
-      STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
-      STATUSLINE_SHOW_SESSION_CMD|STATUSLINE_SESSION_CMD|\
+      STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_GIT_DETAIL|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
+      STATUSLINE_SHOW_SESSION_CMD|STATUSLINE_SESSION_CMD|STATUSLINE_SHOW_PR|STATUSLINE_HYPERLINKS|\
       STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH)
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
-      # Prefix-glob match instead of enumerating every key (there are 31) --
+      # Prefix-glob match instead of enumerating every key (there are dozens) --
       # unlike the exact-match keys above, a glob's `*` matches ANY
       # characters, including `[...]`. A tampered config line like
       #   STATUSLINE_COLOR_DIR[$(some command)]=196
@@ -472,6 +494,10 @@ if [ -z "$NO_COLOR" ]; then
   _resolve_color "$STATUSLINE_COLOR_MEM_OK" 120;               _mem_ok=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_MEM_WARN" 220;             _mem_warn=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_MEM_CRIT" 196;             _mem_crit=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_PR_OK" 114;                _pr_ok=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_PR_WARN" 221;              _pr_warn=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_PR_CRIT" 203;              _pr_crit=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_PR_DRAFT" 245;             _pr_draft=$'\033[38;5;'"${REPLY}m"
 else
   _dir="" _model="" _ccver="" _style="" _git="" _cmd=""
   _cache="" _today="" _week="" _month=""
@@ -479,6 +505,7 @@ else
   _ctx_ok="" _ctx_warn="" _ctx_crit=""
   _session_ok="" _session_warn="" _session_crit=""
   _mem_ok="" _mem_warn="" _mem_crit=""
+  _pr_ok="" _pr_warn="" _pr_crit="" _pr_draft=""
 fi
 
 # ---- icon overrides (plain parameter expansion, zero forks) ----
@@ -986,7 +1013,8 @@ if command -v jq >/dev/null 2>&1; then
   _has_jq=1
   IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style \
     ctx_input_tokens ctx_window_size \
-    session_cost_usd transcript_path rate_limits_json rl5h_pct rl5h_reset < <(
+    session_cost_usd transcript_path rate_limits_json rl5h_pct rl5h_reset \
+    pr_number pr_url pr_state pr_kind < <(
     jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
@@ -999,7 +1027,11 @@ if command -v jq >/dev/null 2>&1; then
       (.transcript_path // ""),
       (.rate_limits // {} | tostring),
       (.rate_limits.five_hour.used_percentage as $u | if ($u|type)=="number" then $u else "" end),
-      (.rate_limits.five_hour.resets_at as $r | if ($r|type)=="number" then $r else "" end)
+      (.rate_limits.five_hour.resets_at as $r | if ($r|type)=="number" then $r else "" end),
+      (.pr.number // ""),
+      (.pr.url // ""),
+      (.pr.review_state // ""),
+      (.pr.kind // "")
     ] | join("\u001f")' 2>/dev/null <<< "$input"
   )
   current_dir="${current_dir//$HOME/~}"
@@ -1013,6 +1045,7 @@ else
   rate_limits_json=""
   rl5h_pct=""
   rl5h_reset=""
+  pr_number=""
 fi
 
 # ---- rate limits cache (side-channel output for external consumers, e.g.
@@ -1037,17 +1070,39 @@ if [ -n "$rate_limits_json" ] && [ "$rate_limits_json" != "{}" ] && [ "$rate_lim
 fi
 
 # ---- git ----
-# All git plumbing is gathered in one function and run under a single
-# timeout, instead of guarding each call, to avoid multiplying subprocess
-# count. A stuck index.lock / slow filesystem degrades to no branch shown
-# (same graceful-degradation contract as the rest of this section).
+# --no-optional-locks: a render must not take index.lock while Claude Code runs git.
+# A stuck index.lock / slow filesystem hits the timeout and shows no branch.
+# $1 = "1" also reports REBASE/MERGE/... state, at the cost of one more fork.
 _gather_git_info() {
-  git rev-parse --git-dir >/dev/null 2>&1 || return
-  local branch dirty="" behind="" ahead=""
-  branch=$(git branch --show-current 2>/dev/null || git rev-parse --short HEAD 2>/dev/null)
-  [ -n "$branch" ] && [ -n "$(git status --porcelain 2>/dev/null)" ] && dirty="1"
-  read -r behind ahead < <(git rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null)
-  printf '%s\x1f%s\x1f%s\x1f%s' "$branch" "$dirty" "$behind" "$ahead"
+  local st line oid="" head="" ab="" a="" b="" stash=0 staged=0 modified=0 untracked=0 conflict=0 dirty="" op="" gd
+  st=$(git --no-optional-locks status --porcelain=v2 --branch --show-stash 2>/dev/null) || return
+  while IFS= read -r line; do
+    case $line in
+      '# branch.oid '*)  oid=${line#'# branch.oid '} ;;
+      '# branch.head '*) head=${line#'# branch.head '} ;;
+      '# branch.ab '*)   ab=${line#'# branch.ab '} ;;
+      '# stash '*)       stash=${line#'# stash '} ;;
+      '#'*|'') ;;
+      [12]' '*)
+        dirty=1
+        [ "${line:2:1}" != . ] && staged=$((staged + 1))
+        [ "${line:3:1}" != . ] && modified=$((modified + 1))
+        ;;
+      'u '*) dirty=1; conflict=$((conflict + 1)) ;;
+      '? '*) dirty=1; untracked=$((untracked + 1)) ;;
+    esac
+  done <<<"$st"
+  [ "$head" = "(detached)" ] && head=${oid:0:7}
+  [ -n "$ab" ] && read -r a b <<<"$ab"
+  if [ "$1" = 1 ] && gd=$(git rev-parse --git-dir 2>/dev/null); then
+    if [ -d "$gd/rebase-merge" ] || [ -d "$gd/rebase-apply" ]; then op=REBASE
+    elif [ -f "$gd/MERGE_HEAD" ]; then op=MERGE
+    elif [ -f "$gd/CHERRY_PICK_HEAD" ]; then op=CHERRY-PICK
+    elif [ -f "$gd/REVERT_HEAD" ]; then op=REVERT
+    elif [ -f "$gd/BISECT_LOG" ]; then op=BISECT
+    fi
+  fi
+  printf '%s\x1f' "$head" "$dirty" "${b#-}" "${a#+}" "$staged" "$modified" "$untracked" "$conflict" "$stash" "$op"
 }
 # Real `timeout`/`gtimeout` exec their target directly, so a plain shell
 # function name isn't runnable under it — route through `bash -c` with the
@@ -1057,15 +1112,71 @@ export -f _gather_git_info
 
 git_branch=""
 if [ "${STATUSLINE_SHOW_GIT:-1}" != "0" ]; then
-  IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead < <(with_timeout 2 bash -c _gather_git_info)
+  _git_detail=0
+  [ "${STATUSLINE_SHOW_GIT_STATUS:-1}" != "0" ] && [ "${STATUSLINE_SHOW_GIT_DETAIL:-0}" = "1" ] && [ "$_compact" -eq 0 ] && _git_detail=1
+  IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead _gstaged _gmodified _guntracked _gconflict _gstash _gop \
+    < <(with_timeout 2 bash -c '_gather_git_info "$1"' _ "$_git_detail")
   if [ -n "$_gb" ]; then
     git_branch="$_gb"
     if [ "${STATUSLINE_SHOW_GIT_STATUS:-1}" != "0" ]; then
-      [ -n "$_gdirty" ] && git_branch="${git_branch}*"
+      [ -n "$_gdirty" ] && [ "$_git_detail" -eq 0 ] && git_branch="${git_branch}*"
       git_ahead_behind=""
       [[ "$git_ahead" =~ ^[0-9]+$ ]] && [ "$git_ahead" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↑${git_ahead}"
       [[ "$git_behind" =~ ^[0-9]+$ ]] && [ "$git_behind" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↓${git_behind}"
       [ -n "$git_ahead_behind" ] && git_branch="${git_branch} ${git_ahead_behind}"
+      if [ "$_git_detail" -eq 1 ]; then
+        [[ "$_gstaged" =~ ^[1-9][0-9]*$ ]]    && git_branch="${git_branch} +${_gstaged}"
+        [[ "$_gmodified" =~ ^[1-9][0-9]*$ ]]  && git_branch="${git_branch} ~${_gmodified}"
+        [[ "$_guntracked" =~ ^[1-9][0-9]*$ ]] && git_branch="${git_branch} ?${_guntracked}"
+        [[ "$_gconflict" =~ ^[1-9][0-9]*$ ]]  && git_branch="${git_branch} !${_gconflict}"
+        [[ "$_gstash" =~ ^[1-9][0-9]*$ ]]     && git_branch="${git_branch} \$${_gstash}"
+        [ -n "$_gop" ] && git_branch="${git_branch} ${_gop}"
+      fi
+    fi
+  fi
+fi
+
+# ---- pull request / merge request ----
+# stdin .pr has no pipeline state; git-mr's cached record adds it only when it
+# is the same PR/MR. Only URL-safe characters get linked, so a crafted URL
+# can't inject terminal escapes.
+_url_re='^https?://[][A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+_link() {
+  if [ "${STATUSLINE_HYPERLINKS:-1}" != "0" ] && [[ "$1" =~ $_url_re ]]; then
+    REPLY=$'\033]8;;'"$1"$'\a'"$2"$'\033]8;;\a'
+  else
+    REPLY="$2"
+  fi
+}
+
+pr_seg=""
+if [ "${STATUSLINE_SHOW_PR:-1}" != "0" ] && [[ "$pr_number" =~ ^[0-9]{1,9}$ ]]; then
+  case "$pr_state" in
+    approved)          _prc="$_pr_ok" ;;
+    changes_requested) _prc="$_pr_crit" ;;
+    draft)             _prc="$_pr_draft" ;;
+    *)                 _prc="$_pr_warn" ;;
+  esac
+  _pr_kind=pr _pr_label="#$pr_number"
+  [ "$pr_kind" = mr ] && _pr_kind=mr _pr_label="!$pr_number"
+  [ "$pr_state" = draft ] && _pr_label="$_pr_label draft"
+  _link "$pr_url" "$_pr_label"
+  pr_seg="${_prc}${REPLY}${_rst}"
+
+  if command -v git-mr >/dev/null 2>&1; then
+    IFS=$'\t' read -r _mr_kind _mr_num _ _ _mr_pipe _mr_pipe_url < <(with_timeout 1 git-mr --cached 2>/dev/null)
+    if [ "$_mr_kind" = "$_pr_kind" ] && [ "$_mr_num" = "$pr_number" ]; then
+      _pipe_sym=""
+      case "$_mr_pipe" in
+        success)  _pipe_sym="✔" _pipe_c="$_pr_ok" ;;
+        failed)   _pipe_sym="✘" _pipe_c="$_pr_crit" ;;
+        running)  _pipe_sym="●" _pipe_c="$_pr_warn" ;;
+        canceled) _pipe_sym="⊘" _pipe_c="$_pr_draft" ;;
+      esac
+      if [ -n "$_pipe_sym" ]; then
+        _link "$_mr_pipe_url" "$_pipe_sym"
+        pr_seg="${pr_seg} ${_pipe_c}${REPLY}${_rst}"
+      fi
     fi
   fi
 fi
@@ -1308,6 +1419,9 @@ if [ "$_compact" -eq 1 ]; then
   if [ -n "$git_branch" ]; then
     printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
   fi
+  if [ -n "$pr_seg" ]; then
+    printf '  %s' "$pr_seg"
+  fi
   printf '  %s%s%s' "$_sep" "$_sep_char" "$_rst"
   printf ' %s%s%s' "$_model" "$model_name" "$_rst"
 
@@ -1366,6 +1480,9 @@ else
   printf '%s %s%s%s' "$_icon_dir" "$_dir" "$current_dir" "$_rst"
   if [ -n "$git_branch" ]; then
     printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
+  fi
+  if [ -n "$pr_seg" ]; then
+    printf '  %s' "$pr_seg"
   fi
   printf '  %s%s%s' "$_sep" "$_sep_char" "$_rst"
   printf ' %s%s%s' "$_model" "$model_name" "$_rst"

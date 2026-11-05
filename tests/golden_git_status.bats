@@ -129,3 +129,110 @@ EOF
 
   rm -rf "$base"
 }
+
+# ---- STATUSLINE_SHOW_GIT_DETAIL=1 ----
+
+@test "golden: detail mode on a clean repo shows the bare branch name" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main  │"* ]]
+
+  rm -rf "$base"
+}
+
+@test "golden: detail mode counts staged, modified, untracked and stash instead of *" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  echo "stashed" >>"$base/work/file.txt"
+  git -C "$base/work" stash --quiet
+  echo "staged" >"$base/work/staged.txt"
+  git -C "$base/work" add staged.txt
+  echo "modified" >>"$base/work/file.txt"
+  echo "untracked" >"$base/work/untracked.txt"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main +1 ~1 ?1 \$1  │"* ]]
+
+  rm -rf "$base"
+}
+
+@test "golden: detail mode keeps ahead/behind before the counts" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  echo "two" >>"$base/work/file.txt"
+  git -C "$base/work" commit --quiet -am "second"
+  echo "dirty" >>"$base/work/file.txt"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main ↑1 ~1  │"* ]]
+
+  rm -rf "$base"
+}
+
+@test "golden: detail mode shows a merge conflict count and the MERGE state" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  git -C "$base/work" branch side
+  echo "main side" >"$base/work/file.txt"
+  git -C "$base/work" commit --quiet -am "main change"
+  git -C "$base/work" switch --quiet side
+  echo "other side" >"$base/work/file.txt"
+  git -C "$base/work" commit --quiet -am "side change"
+  git -C "$base/work" switch --quiet main
+  git -C "$base/work" merge --quiet side >/dev/null 2>&1 || true
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main ↑1 !1 MERGE  │"* ]]
+
+  rm -rf "$base"
+}
+
+@test "golden: compact mode ignores detail mode and keeps the * marker" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  echo "dirty" >>"$base/work/file.txt"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1 STATUSLINE_COMPACT=1
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main*  │"* ]]
+
+  rm -rf "$base"
+}
+
+@test "golden: STATUSLINE_SHOW_GIT_STATUS=0 also hides detail counts" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  echo "dirty" >>"$base/work/file.txt"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1 STATUSLINE_SHOW_GIT_STATUS=0
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main  │"* ]]
+
+  rm -rf "$base"
+}
+
+@test "golden: detached HEAD shows the short commit hash" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  git -C "$base/work" switch --quiet --detach HEAD
+  sha="$(git -C "$base/work" rev-parse HEAD)"
+
+  run run_statusline_in "$base/work" "$JSON"
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  ${sha:0:7}  │"* ]]
+
+  rm -rf "$base"
+}
