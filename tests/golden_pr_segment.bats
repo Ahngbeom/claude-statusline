@@ -98,3 +98,9 @@ line1() { sed -n '1p' <<<"$output"; }
   run run_statusline "$MR_JSON" STATUSLINE_HYPERLINKS=0 "PATH=$BATS_TEST_TMPDIR/bin:$PATH"
   [[ "$(line1)" == *"  !289  │"* ]]
 }
+
+@test "golden: a git-mr record with no pipeline adds no mark" {
+  fake_git_mr "$BATS_TEST_TMPDIR/bin" 'mr\t289\thttps://x/289\tok\t\thttps://x/checks'
+  run run_statusline "$MR_JSON" STATUSLINE_HYPERLINKS=0 "PATH=$BATS_TEST_TMPDIR/bin:$PATH"
+  [[ "$(line1)" == *"  !289  │"* ]]
+}
