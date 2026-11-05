@@ -152,3 +152,14 @@ record() { "$GIT_MR" --refresh "$T/repo"; }
   run record
   [ "$output" = $'pr\t41\thttps://github.com/up/r/pull/41\tpending\t\thttps://github.com/up/r/pull/41/checks' ]
 }
+
+@test "git-mr: a PR without any checks keeps an empty pipeline field" {
+  git -C "$T/repo" remote set-url origin git@github.com:o/r.git
+  echo '[{"number":12,"url":"https://github.com/o/r/pull/12","isDraft":false,"reviewDecision":"","headRepositoryOwner":{"login":"o"},"statusCheckRollup":[]}]' >"$T/prs.github.com_o_r.json"
+  cd "$T/repo"
+  run env GIT_MR_LINKS=0 "$GIT_MR"
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == *"pending  pipeline:none" ]]
+  run env GIT_MR_LINKS=0 "$GIT_MR" --segment
+  [ "$output" = $'\033[33m#12\033[0m' ]
+}

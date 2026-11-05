@@ -1165,7 +1165,9 @@ if [ "${STATUSLINE_SHOW_PR:-1}" != "0" ] && [[ "$pr_number" =~ ^[0-9]{1,9}$ ]]; 
   pr_seg="${_prc}${REPLY}${_rst}"
 
   if command -v git-mr >/dev/null 2>&1; then
-    IFS=$'\t' read -r _mr_kind _mr_num _ _ _mr_pipe _mr_pipe_url < <(with_timeout 1 git-mr --cached 2>/dev/null)
+    _mr_rec=$(with_timeout 1 git-mr --cached 2>/dev/null)
+    # Tab is IFS whitespace, so splitting on it would collapse an empty field.
+    IFS=$'\x1f' read -r _mr_kind _mr_num _ _ _mr_pipe _mr_pipe_url <<<"${_mr_rec//$'\t'/$'\x1f'}"
     if [ "$_mr_kind" = "$_pr_kind" ] && [ "$_mr_num" = "$pr_number" ]; then
       _pipe_sym=""
       case "$_mr_pipe" in

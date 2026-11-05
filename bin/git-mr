@@ -166,7 +166,13 @@ refresh_in_background() {
   fi
 }
 
-record() { IFS=$'\t' read -r kind num murl state pipe purl <"$cache" 2>/dev/null; [ -n "${num:-}" ]; }
+# Tab is IFS whitespace, so splitting on it would collapse an empty pipeline field.
+record() {
+  local line=''
+  IFS= read -r line <"$cache" 2>/dev/null
+  IFS=$'\x1f' read -r kind num murl state pipe purl <<<"${line//$'\t'/$'\x1f'}"
+  [ -n "${num:-}" ]
+}
 
 segment() {
   local o='' c='' u=$murl pu=$purl col sym pcol
