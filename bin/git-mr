@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# git-mr: open GitLab MR / GitHub PR for the current branch, with a short-lived cache.
+# Part of claude-statusline: https://github.com/ahngbeom/claude-statusline
+# Needs jq, plus glab (GitLab, incl. self-managed) or gh (GitHub), logged in.
+#
+#   git mr                      refresh now and print a clickable summary
+#   git mr --open               open the MR/PR in a browser (prints the URL when no browser)
+#   git mr --url                print the MR/PR URL
+#   git mr --segment[=WRAP] [DIR]
+#                               print a colored, clickable segment from the cache, for prompts
+#                               and the Claude Code statusline; WRAP is bash or zsh to mark
+#                               escape sequences as zero-width in PS1/PROMPT
+#   git mr --cached [DIR]       print the cached TSV record
+#   git mr --refresh [DIR]      refresh now and print the TSV record
+#
+# --segment and --cached never touch the network; a stale cache is refreshed in the background.
+# TSV record: kind(mr|pr) number url state(ok|pending|bad|draft) pipeline pipeline_url
+#   pipeline: success | failed | running | canceled | "" (none)
+#
+# Env: GIT_MR_TTL (seconds, default 120), GIT_MR_LINKS=0 for plain text instead of OSC 8 links.
+set -uo pipefail
+
+ttl=${GIT_MR_TTL:-120}
+cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/git-mr
+
+mode=summary wrap=
+case ${1:-} in
+  --cached|--refresh|--open|--url|--segment) mode=${1#--}; shift ;;
+  --segment=*) mode=segment; wrap=${1#--segment=}; shift ;;
+  -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+dir=${1:-$PWD}
+
+g() { git -C "$dir" --no-optional-locks "$@" 2>/dev/null; }
+
+head_ref=$(g symbolic-ref -q HEAD) || exit 0
+IFS='|' read -r branch up_remote up_ref < <(
+  g for-each-ref --format='%(refname:short)|%(upstream:remotename)|%(upstream:remoteref)' "$head_ref")
+branch=${branch:-${head_ref#refs/heads/}}
+remote=${up_remote:-origin}
+src_branch=${up_ref#refs/heads/}
+src_branch=${src_branch:-$branch}
+url=$(g remote get-url "$remote") || exit 0
+
+# https://[user@]host[:port]/path(.git) | ssh://[user@]host[:port]/path | [user@]host:path
+case $url in
+  *://*) rest=${url#*://}; hostport=${rest%%/*}; path=${rest#*/} ;;
+  *:*)   hostport=${url%%:*}; path=${url#*:} ;;
+  *)     exit 0 ;;
+esac
+hostport=${hostport##*@}
+host=${hostport%%:*}
+path=${path%.git}
+path=${path%/}
+[ -n "$host" ] && [ -n "$path" ] || exit 0
+
+case $host in
+  github.com|*github*) provider=github ;;
+  *)                   provider=gitlab ;;
+esac
+
+key=$(printf '%s\n' "$host/$path:$src_branch" | cksum | tr ' ' '-')
+cache=$cache_dir/$key
+
+uri() { jq -rn --arg s "$1" '$s|@uri'; }
+
+fetch_gitlab() {
+  local proj mr iid
+  proj=$(uri "$path")
+  mr=$(glab api --hostname "$host" \
+        "projects/$proj/merge_requests?state=opened&source_branch=$(uri "$src_branch")&per_page=1" 2>/dev/null) || return 1
+  iid=$(jq -r '.[0].iid // empty' <<<"$mr") || return 1
+  [ -n "$iid" ] || return 0
+  glab api --hostname "$host" "projects/$proj/merge_requests/$iid" 2>/dev/null | jq -r '
+    [ "mr", (.iid|tostring), .web_url,
+      (if .draft or .work_in_progress then "draft"
+       elif .has_conflicts or (.detailed_merge_status | IN("conflict","broken_status","need_rebase","ci_must_pass")) then "bad"
+       elif .detailed_merge_status == "mergeable" then "ok"
+       else "pending" end),
+      (.head_pipeline.status // "" |
+        if . == "" then ""
+        elif . == "success" then "success"
+        elif . == "failed" then "failed"
+        elif IN("canceled","skipped") then "canceled"
+        else "running" end),
+      (.head_pipeline.web_url // "")
+    ] | @tsv'
+}
+
+fetch_github() {
+  gh pr list -R "$host/$path" --head "$src_branch" --state open --limit 1 \
+     --json number,url,isDraft,reviewDecision,statusCheckRollup 2>/dev/null | jq -r '
+    .[0] // empty |
+    [ (.statusCheckRollup // [] | map(.conclusion // .state // .status // "" | ascii_upcase)) as $c |
+      "pr", (.number|tostring), .url,
+      (if .isDraft then "draft"
+       elif .reviewDecision == "APPROVED" then "ok"
+       elif .reviewDecision == "CHANGES_REQUESTED" then "bad"
+       else "pending" end),
+      (if ($c|length) == 0 then ""
+       elif any($c[]; IN("FAILURE","ERROR","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE")) then "failed"
+       elif any($c[]; IN("PENDING","QUEUED","IN_PROGRESS","EXPECTED","WAITING","REQUESTED","")) then "running"
+       elif any($c[]; IN("CANCELLED")) then "canceled"
+       else "success" end),
+      (.url + "/checks")
+    ] | @tsv'
+}
+
+refresh() {
+  local out tmp rc
+  mkdir -p "$cache_dir"
+  if [ "$provider" = gitlab ]; then out=$(fetch_gitlab); rc=$?; else out=$(fetch_github); rc=$?; fi
+  if [ "$rc" -eq 0 ]; then
+    tmp=$(mktemp "$cache.XXXXXX") && printf '%s' "$out" >"$tmp" && mv -f "$tmp" "$cache"
+  else
+    # Keep the last record and retry after TTL, instead of hitting the API on every prompt.
+    touch "$cache"
+    return 1
+  fi
+}
+
+is_fresh() {
+  [ -f "$cache" ] || return 1
+  local now mtime
+  now=$(date +%s)
+  mtime=$(stat -c %Y "$cache" 2>/dev/null || stat -f %m "$cache" 2>/dev/null) || return 1
+  [ $((now - mtime)) -lt "$ttl" ]
+}
+
+refresh_in_background() {
+  local lock=$cache.lock
+  # A lock older than a minute belongs to a refresh that died; reclaim it.
+  if [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+    rmdir "$lock" 2>/dev/null
+  fi
+  mkdir -p "$cache_dir"
+  mkdir "$lock" 2>/dev/null || return 0
+  # Detached: Claude Code cancels an in-flight statusline run, and a prompt must not wait.
+  if command -v setsid >/dev/null; then
+    setsid -f "$0" --refresh "$dir" >/dev/null 2>&1 </dev/null
+  else
+    nohup "$0" --refresh "$dir" >/dev/null 2>&1 </dev/null &
+  fi
+}
+
+record() { IFS=$'\t' read -r kind num murl state pipe purl <"$cache" 2>/dev/null; [ -n "${num:-}" ]; }
+
+segment() {
+  local o='' c='' u=$murl pu=$purl col sym pcol
+  case $wrap in
+    bash) o='\['; c='\]' ;;
+    zsh)  o='%{'; c='%}'; u=${u//\%/%%}; pu=${pu//\%/%%} ;;
+  esac
+  esc()   { printf '%s\033[%sm%s' "$o" "$1" "$c"; }
+  # BEL terminator: ST (ESC \) would put a backslash into PS1.
+  lopen() { [ "${GIT_MR_LINKS:-1}" = 0 ] || printf '%s\033]8;;%s\a%s' "$o" "$1" "$c"; }
+  lclose() { [ "${GIT_MR_LINKS:-1}" = 0 ] || printf '%s\033]8;;\a%s' "$o" "$c"; }
+
+  case $state in ok) col=32 ;; bad) col=31 ;; draft) col=2 ;; *) col=33 ;; esac
+  case $pipe in
+    success)  sym=✔ pcol=32 ;;
+    failed)   sym=✘ pcol=31 ;;
+    running)  sym=● pcol=33 ;;
+    canceled) sym=⊘ pcol=2 ;;
+    *)        sym='' ;;
+  esac
+
+  esc "$col"; lopen "$u"
+  if [ "$kind" = mr ]; then printf '!%s' "$num"; else printf '#%s' "$num"; fi
+  [ "$state" = draft ] && printf ' draft'
+  lclose; esc 0
+  if [ -n "$sym" ]; then
+    printf ' '; esc "$pcol"; lopen "$pu"; printf '%s' "$sym"; lclose; esc 0
+  fi
+}
+
+case $mode in
+  cached|segment)
+    is_fresh || refresh_in_background
+    [ -s "$cache" ] || exit 0
+    if [ "$mode" = cached ]; then cat "$cache"; else record && segment; fi
+    ;;
+  refresh)
+    refresh
+    rmdir "$cache.lock" 2>/dev/null
+    cat "$cache" 2>/dev/null
+    ;;
+  url|open|summary)
+    refresh || echo "warning: $provider lookup failed for $host (auth/network?); showing cached data" >&2
+    record
+    if [ -z "${num:-}" ]; then
+      what="pull request"
+      [ "$provider" = gitlab ] && what="merge request"
+      echo "no open $what for $src_branch on $host/$path" >&2
+      exit 1
+    fi
+    case $mode in
+      url) echo "$murl" ;;
+      open)
+        if [ "$(uname)" = Darwin ]; then open "$murl"
+        elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null; then xdg-open "$murl" >/dev/null 2>&1
+        else echo "$murl"
+        fi ;;
+      summary)
+        printf '%s  %s  pipeline:%s\n%s\n' "$(segment)" "$state" "${pipe:-none}" "$murl" ;;
+    esac
+    ;;
+esac
+exit 0

@@ -13,7 +13,7 @@ Claude Code CLI용 3줄 컴팩트 statusline 스크립트. 세션 컨텍스트 �
 bats tests/
 
 # 린트 실행 (shellcheck 필요: brew install shellcheck)
-shellcheck statusline.sh configure.sh install.sh uninstall.sh scripts/*.sh tests/test_helper.bash
+shellcheck statusline.sh configure.sh install.sh uninstall.sh scripts/*.sh bin/git-mr shell/git-prompt.sh tests/test_helper.bash
 
 # 로컬 수동 테스트 (mock stdin으로 statusline 실행)
 echo '{"workspace":{"current_dir":"/tmp/test"},"model":{"display_name":"Opus 4.6"},"session_id":"test-123","version":"1.0.44","output_style":{"name":"explanatory"}}' | bash statusline.sh
@@ -51,9 +51,11 @@ Claude Code CLI → stdin(세션 JSON) → statusline.sh → stdout(3줄 ANSI �
 | stdin context_window | Claude Code >= v17.2.0 | Line 2 (컨텍스트 토큰) | Primary |
 | 세션 JSONL | `~/.claude/projects/-{encoded-dir}/{session-id}.jsonl` 마지막 20줄 | Line 2 (컨텍스트 토큰) | Fallback |
 | ccusage 캐시 | `~/.claude/stats-cache.json` (TTL 60초, 백그라운드 갱신) | Line 2 (세션), Line 3 (비용) | — |
-| Git | `git branch --show-current` | Line 1 (브랜치명) | — |
+| Git | `git --no-optional-locks status --porcelain=v2 --branch --show-stash` 1회 (+ 상세 모드면 `rev-parse --git-dir` 1회) | Line 1 (브랜치명·dirty·ahead/behind·상세 개수) | — |
+| stdin `pr` | Claude Code가 전달 (`number`/`url`/`review_state`/`kind`) | Line 1 (PR/MR 번호, 리뷰 상태 색) | Primary |
+| git-mr 캐시 | `bin/git-mr --cached` (`$XDG_CACHE_HOME/git-mr/`, TTL 120초, 백그라운드 갱신) | Line 1 (파이프라인 표시) | `pr`과 같은 PR/MR일 때만 |
 | 부모 프로세스 argv | `/proc/<pid>/cmdline` (Linux) 또는 `ps -o ppid=,args=` (macOS/BSD) | Line 1 (세션 기동 CLI 플래그) | — |
-| 사용자 설정 파일 | `~/.claude/statusline.conf` (`configure.sh`가 씀) | 전체 (표시 여부/색상/compact 등 19개 설정) | env var보다 후순위 |
+| 사용자 설정 파일 | `~/.claude/statusline.conf` (`configure.sh`가 씀) | 전체 (표시 여부/색상/compact 등) | env var보다 후순위 |
 
 `statusline.sh`는 stdout 3줄 외에 side-channel 출력도 하나 만든다: stdin의 `rate_limits`(있으면)를
 그대로 `~/.claude/rate-limits-cache.json`에 써서 남긴다. 이 스크립트 자신은 이 값을 렌더링에 쓰지
@@ -125,19 +127,20 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 `configure.sh set/get/unset/list/reset/path` CLI로 자신의 표시 설정을 영구 저장할 수 있다.
 `statusline.sh`는 시작 시(`STATUSLINE_CONFIG_FILE` 환경변수로 경로 오버라이드 가능, 기본
 `~/.claude/statusline.conf`) 이 파일을 `KEY=VALUE` 줄 단위로 파싱해 읽는다 — `source`하지 않고
-19개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
+22개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
 있으면 그 키는 건너뛴다** (env var가 항상 config 파일보다 우선). 서브프로세스를 하나도 만들지
 않는다 (순수 bash while-read). `STATUSLINE_COLOR_*`/`STATUSLINE_ICON_*`/`STATUSLINE_THRESHOLD_*`/
-`STATUSLINE_SEP_CHAR`는 이 19개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
+`STATUSLINE_SEP_CHAR`는 이 22개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
 로더를 건드리지 않아도 된다 (`configure.sh`의 4개 레지스트리만 갱신).
 
-19개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
+22개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
 - **presence**: `NO_COLOR`/`STATUSLINE_UNICODE`/`STATUSLINE_HIDE_COST` — `statusline.sh`가 `-z`/`-n`으로
   검사하므로 "켬"은 `KEY=1`을 쓰고 "끔"은 **키 자체를 삭제**해야 한다 (`KEY=0`을 쓰면 `-z`가
   거짓이 되어 오히려 "켬"으로 해석됨 — `configure.sh`가 이 변환을 대신 처리)
 - **tristate**: `STATUSLINE_COMPACT` — `1`/`0`/키 삭제(`$COLUMNS` 자동 감지로 복귀) 3가지
 - **numeric**: `STATUSLINE_COMPACT_WIDTH`, `STATUSLINE_MAX_CONTEXT`
-- **bool**: `STATUSLINE_SHOW_*` 12개 — 값 기반, 기본값 `1`(표시), `0`이면 숨김
+- **bool**: `STATUSLINE_SHOW_*` 14개 + `STATUSLINE_HYPERLINKS` — 값 기반, 기본값 `1`(표시), `0`이면 숨김.
+  `STATUSLINE_SHOW_GIT_DETAIL`만 기본값 `0`(opt-in)이라 `configure.sh`의 `_key_default()`에 명시돼 있다
 - **text**: `STATUSLINE_SESSION_CMD` — 임의 문자열이지만 원문 렌더링은 하지 않고
   `_format_session_cmd` 화이트리스트를 통과시키므로 주입 표면이 없다 (`STATUSLINE_ICON_*`/
   `STATUSLINE_SEP_CHAR`도 같은 `text` 타입이지만 그쪽은 `printf %s` 인자로만 쓰인다는 다른 근거)
@@ -168,11 +171,14 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 | 컨텍스트 계산 | `# ---- context window calculation` | stdin context_window 우선, JSONL fallback |
 | ccusage 통합 | `# ---- ccusage integration` | 일/주/월 통계, 세션 시간, 캐시 히트율 |
 | 세션 기동 옵션 수집 | `# ---- session invocation` (렌더 직전, `# ---- memory usage` 다음) | `_compact=0` + `STATUSLINE_SHOW_SESSION_CMD!=0`일 때만 `_gather_session_argv` → `_format_session_cmd` 실행해 `$_session_cmd` 설정 |
+| PR/MR | `# ---- pull request / merge request` | stdin `pr`로 `!N`/`#N` 세그먼트 조립, `_link()`(OSC 8, URL 허용 문자만)로 링크. `git-mr`이 PATH에 있고 기록이 같은 PR/MR이면 파이프라인 표시 추가 |
 | 렌더링 | `# ---- render statusline` | `$_compact` 값으로 축약/전체 레이아웃 분기 후 3줄 출력 조립 |
 
 ### 파일 역할
 
 - **statusline.sh**: 메인 스크립트. `~/.claude/settings.json`에 `"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}` 형태로 등록 (소문자 `"statusline"` 문자열 키는 Claude Code가 읽지 않는다). stdout 렌더링과 별개로, stdin에 `rate_limits`가 있으면 `~/.claude/rate-limits-cache.json`에도 그대로 옮겨 쓴다(cc-menutor 등 외부 도구용 side-channel). 시작 시 `~/.claude/statusline.conf`(사용자 설정 파일, 아래 참고)도 읽는다
+- **bin/git-mr**: 현재 브랜치의 GitLab MR / GitHub PR을 `glab`/`gh`로 조회하는 독립 스크립트 (npm `bin`으로 PATH에 등록, `git mr` 서브커맨드). `--cached`/`--segment`는 네트워크를 건드리지 않고 캐시만 읽으며 오래되면 `setsid`/`nohup`으로 분리한 백그라운드 갱신을 띄운다. `statusline.sh`는 이 파일 없이도 동작해야 한다 (파이프라인 표시만 빠짐). curl 설치기는 이 파일을 설치하지 않는다
+- **shell/git-prompt.sh**: bash/zsh 프롬프트용 선택 스니펫. git의 `__git_ps1` + `git-mr --segment=bash|zsh`. 설치기가 건드리지 않으며 README 안내대로 사용자가 직접 source
 - **configure.sh**: `statusline.sh`와 나란히 설치되는 독립 CLI/TUI. `~/.claude/statusline.conf`를 읽고 쓴다 (`list`/`get`/`set`/`unset`/`reset`/`path`/`preview` 서브커맨드, 인자 없이 실행하면 대화형 메뉴). 외부 의존성 없는 순수 bash
 - **install.sh**: 원라이너 설치 (`curl | bash`). 의존성 확인 → GitHub에서 statusline.sh + configure.sh 다운로드 → settings.json의 `statusLine` 객체(`type`/`command`) 설정. `padding`/`refreshInterval` 등 기존 `statusLine` 필드는 유지하고, 1.11.1 이전 설치기가 쓰던 소문자 `statusline` 키는 지운다. 기존 settings.json이 있으면 `.backup` 생성. 기존 `~/.claude/statusline.sh`의 2번째 줄이 `# claude-statusline - `로 시작하지 않으면(사용자 스크립트) `statusline.sh.backup-<timestamp>`로 보존한 뒤 교체
 - **uninstall.sh**: `~/.claude/statusline.sh`, `~/.claude/configure.sh`, `~/.claude/stats-cache.json`, `~/.claude/rate-limits-cache.json`, `~/.claude/statusline.conf` 삭제, settings.json에서 이 스크립트를 가리키는 `statusLine`과 소문자 `statusline` 키 제거. `statusline.sh`가 claude-statusline 것이 아니면 파일과 `statusLine` 둘 다 남긴다
@@ -212,11 +218,11 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 - `STATUSLINE_HIDE_COST=1` 환경변수로 세션 비용(Line 2)과 Line 3 전체 숨김
 - `STATUSLINE_COMPACT=1`/`=0` 환경변수로 축약 레이아웃 강제 on/off (미설정 시 `$COLUMNS` 자동 감지)
 - `STATUSLINE_COMPACT_WIDTH=<cols>` 환경변수로 자동 축약 전환 기준 폭 오버라이드 (기본값 80)
-- `STATUSLINE_SHOW_*=1/0` 12개 환경변수(GIT/GIT_STATUS/CC_VERSION/OUTPUT_STYLE/MEM/SESSION_CMD/SESSION/CACHE/SPEED/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
+- `STATUSLINE_SHOW_*=1/0` 14개 환경변수(GIT/GIT_STATUS/GIT_DETAIL/PR/CC_VERSION/OUTPUT_STYLE/MEM/SESSION_CMD/SESSION/CACHE/SPEED/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
 - `STATUSLINE_SESSION_CMD=<cmd>` 환경변수로 부모 프로세스 argv 자동 탐색을 건너뛰고 기동 명령어를 직접 지정 (래퍼/멀티플렉서가 프로세스 체인을 3단계 넘게 늘려 자동 탐색이 실패하는 환경의 탈출구 겸, 골든 테스트의 플랫폼 독립 seam — 원문 렌더링이 아니라 자동 탐색과 동일한 화이트리스트를 통과한다)
 - 위 모든 env var는 `~/.claude/statusline.conf`(`configure.sh`가 관리)로도 설정 가능하며, 이미 설정된 env var가 항상 config 파일 값보다 우선함
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
-- Git 브랜치명은 dirty(`*`)/ahead-behind(`↑N↓N`) 표시를 포함하며, upstream 미설정 시 ahead/behind는 조용히 생략됨 (graceful degradation과 동일한 원칙)
+- Git 브랜치명은 dirty(`*`)/ahead-behind(`↑N↓N`) 표시를 포함하며, upstream 미설정 시 ahead/behind는 조용히 생략됨 (graceful degradation과 동일한 원칙). detached HEAD는 짧은 커밋 해시. `STATUSLINE_SHOW_GIT_DETAIL=1`이면 `*` 대신 `+staged ~modified ?untracked !conflict $stash`와 `REBASE`/`MERGE` 등 진행 중인 작업을 붙인다 (compact 모드에서는 무시하고 `*` 유지)
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
 - Line 1의 세션 기동 옵션(`⌘ ...`)은 **기동 시점 argv**다. 따라서 `--permission-mode`는 세션이 시작될 때의 값이며 세션 중 Shift+Tab 변경을 따라가지 않는다 — 이건 버그가 아니라 데이터 출처의 성질이다. 실시간 권한 모드는 stdin에 없고 transcript JSONL의 `{"type":"permission-mode"}` 레코드에는 타임스탬프가 없어 "마지막 값"을 신뢰할 수 없으므로 tail 스캔으로 "고치지" 말 것. 새 플래그를 화이트리스트에 추가할 때는 값이 경로/프롬프트/JSON이면 값은 버리고 존재만 렌더링하고(`+mcp`/`+sysprompt` 패턴), 값을 보여줄 플래그는 반드시 `_sc_sanitize`를 거칠 것 — `tests/unit_session_cmd.bats`가 ANSI/개행/길이 초과 케이스를 검증한다
 
