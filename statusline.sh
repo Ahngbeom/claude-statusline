@@ -1114,6 +1114,7 @@ git_branch=""
 if [ "${STATUSLINE_SHOW_GIT:-1}" != "0" ]; then
   _git_detail=0
   [ "${STATUSLINE_SHOW_GIT_STATUS:-1}" != "0" ] && [ "${STATUSLINE_SHOW_GIT_DETAIL:-0}" = "1" ] && [ "$_compact" -eq 0 ] && _git_detail=1
+  # shellcheck disable=SC2016 # $1 belongs to the bash -c script
   IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead _gstaged _gmodified _guntracked _gconflict _gstash _gop \
     < <(with_timeout 2 bash -c '_gather_git_info "$1"' _ "$_git_detail")
   if [ -n "$_gb" ]; then
