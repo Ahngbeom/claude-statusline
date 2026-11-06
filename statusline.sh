@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.12.0
+# Version: 1.12.1
 # License: MIT
 #
 # Features:
@@ -390,6 +390,12 @@
 #     in a bash/zsh prompt. New keys: STATUSLINE_SHOW_GIT_DETAIL,
 #     STATUSLINE_SHOW_PR, STATUSLINE_HYPERLINKS, STATUSLINE_COLOR_PR_OK/
 #     _WARN/_CRIT/_DRAFT.
+#
+# Changes (v1.12.1):
+#   - ccusage fields are split on \x1f instead of tab. A tab IFS merges
+#     empty fields, so an active block with burnRate null (one entry so
+#     far) shifted every later field: no session time, wrong cache rate,
+#     and the cache-read count shown as Speed.
 
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
@@ -1297,13 +1303,13 @@ if [ "$_has_jq" -eq 1 ]; then
   cleanup_stale_lock
   if cached_data=$(read_cache); then
     # Cache hit - extract all fields with single jq call
-    IFS=$'\t' read -r blocks_output daily_output weekly_output monthly_output < <(
+    IFS=$'\x1f' read -r blocks_output daily_output weekly_output monthly_output < <(
       jq -r '[
         (.blocks | tostring),
         (.daily | tostring),
         (.weekly | tostring),
         (.monthly | tostring)
-      ] | @tsv' 2>/dev/null <<< "$cached_data"
+      ] | join("\u001f")' 2>/dev/null <<< "$cached_data"
     )
   else
     # Cache miss - NO synchronous npx call; trigger background update only
@@ -1316,7 +1322,7 @@ if [ "$_has_jq" -eq 1 ]; then
 
   if [ -n "$blocks_output" ] && [ "$blocks_output" != "null" ]; then
     # Extract active block and all fields with single jq call
-    IFS=$'\t' read -r cost_usd tot_tokens tpm cache_read cache_creation reset_time_str start_time_str < <(
+    IFS=$'\x1f' read -r cost_usd tot_tokens tpm cache_read cache_creation reset_time_str start_time_str < <(
       jq -r '
         (.blocks[] | select(.isActive == true)) |
         [
@@ -1327,7 +1333,7 @@ if [ "$_has_jq" -eq 1 ]; then
           (.tokenCounts.cacheCreationInputTokens // 0),
           (.usageLimitResetTime // .endTime // ""),
           (.startTime // "")
-        ] | @tsv' 2>/dev/null <<< "$blocks_output" | head -n1
+        ] | join("\u001f")' 2>/dev/null <<< "$blocks_output" | head -n1
     )
 
     # Cache hit rate calculation
@@ -1380,20 +1386,20 @@ if [ "$_has_jq" -eq 1 ]; then
 
   # Daily/Weekly/Monthly - extract with single jq calls
   if [ -n "$daily_output" ] && [ "$daily_output" != "null" ]; then
-    IFS=$'\t' read -r today_tokens today_cost < <(
-      jq -r '[(.daily[0].totalTokens // ""), (.daily[0].totalCost // "")] | @tsv' 2>/dev/null <<< "$daily_output"
+    IFS=$'\x1f' read -r today_tokens today_cost < <(
+      jq -r '[(.daily[0].totalTokens // ""), (.daily[0].totalCost // "")] | join("\u001f")' 2>/dev/null <<< "$daily_output"
     )
   fi
 
   if [ -n "$weekly_output" ] && [ "$weekly_output" != "null" ]; then
-    IFS=$'\t' read -r week_tokens week_cost < <(
-      jq -r '[(.weekly[-1].totalTokens // ""), (.weekly[-1].totalCost // "")] | @tsv' 2>/dev/null <<< "$weekly_output"
+    IFS=$'\x1f' read -r week_tokens week_cost < <(
+      jq -r '[(.weekly[-1].totalTokens // ""), (.weekly[-1].totalCost // "")] | join("\u001f")' 2>/dev/null <<< "$weekly_output"
     )
   fi
 
   if [ -n "$monthly_output" ] && [ "$monthly_output" != "null" ]; then
-    IFS=$'\t' read -r month_tokens month_cost < <(
-      jq -r '[(.monthly[-1].totalTokens // ""), (.monthly[-1].totalCost // "")] | @tsv' 2>/dev/null <<< "$monthly_output"
+    IFS=$'\x1f' read -r month_tokens month_cost < <(
+      jq -r '[(.monthly[-1].totalTokens // ""), (.monthly[-1].totalCost // "")] | join("\u001f")' 2>/dev/null <<< "$monthly_output"
     )
   fi
 fi
