@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.13.0
+# Version: 1.13.1
 # License: MIT
 #
 # Features:
@@ -424,6 +424,15 @@
 #   - Fixed: $HOME -> ~ replaced matches anywhere in the path (and sibling
 #     dirs like /Users/meow for HOME=/Users/me); the JSONL fallback rebuilt
 #     the session path from that display string, breaking dirs containing ~.
+
+# Changes (v1.13.1):
+#   - bin/git-mr: the PR/MR number and URLs from the API/cache are validated
+#     before they reach a prompt (digits only; http(s) URLs without shell
+#     syntax). shell/git-prompt.sh puts the segment into PS1, which bash
+#     (promptvars) and zsh (PROMPT_SUBST) expand again, so a crafted URL such
+#     as "https://host/$(cmd)" from an untrusted GitLab server or a tampered
+#     cache file ran on every prompt. `git mr --open/--url` also refuse a
+#     non-http(s) URL now.
 
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.

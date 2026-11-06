@@ -163,3 +163,59 @@ record() { "$GIT_MR" --refresh "$T/repo"; }
   run env GIT_MR_LINKS=0 "$GIT_MR" --segment
   [ "$output" = $'\033[33m#12\033[0m' ]
 }
+
+# The segment ends up in PS1, which bash (promptvars) and zsh (PROMPT_SUBST)
+# expand again on every prompt: API- or cache-supplied text must not be able
+# to run commands there.
+evil_mr() {
+  gitlab_mr "{\"web_url\":\"https://git.example.com/x\$(touch $T/pwned-mr)\",
+              \"head_pipeline\":{\"status\":\"success\",\"web_url\":\"https://git.example.com/p\`touch $T/pwned-pipe\`\"}}"
+  record >/dev/null
+}
+
+@test "security: --segment drops URLs carrying shell syntax instead of linking them" {
+  evil_mr
+  run "$GIT_MR" --segment=bash "$T/repo"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'$('* ]] || false
+  [[ "$output" != *'`'* ]] || false
+  [ "$output" = $'\\[\033[32m\\]!7\\[\033[0m\\] \\[\033[32m\\]✔\\[\033[0m\\]' ]
+}
+
+@test "security: an evil URL does not execute when bash expands the segment as PS1" {
+  evil_mr
+  seg=$("$GIT_MR" --segment=bash "$T/repo")
+  # An interactive bash draws the prompt (promptvars on) before reading the next line.
+  printf 'PS1=%q\necho drawn\n' "$seg" | bash --norc -i >/dev/null 2>&1
+  [ ! -e "$T/pwned-mr" ]
+  [ ! -e "$T/pwned-pipe" ]
+}
+
+@test "security: an evil URL does not execute when zsh expands the segment with PROMPT_SUBST" {
+  command -v zsh >/dev/null || skip "zsh not installed"
+  evil_mr
+  "$GIT_MR" --segment=zsh "$T/repo" >"$T/seg"
+  # print -P runs PROMPT_SUBST command substitution like a real prompt; ${(%)p} does not
+  zsh -fc 'setopt PROMPT_SUBST; p=$(<"$1"); print -P -- "$p" >/dev/null' _ "$T/seg"
+  [ ! -e "$T/pwned-mr" ]
+  [ ! -e "$T/pwned-pipe" ]
+}
+
+@test "security: a non-numeric MR/PR number from the cache prints no segment" {
+  gitlab_mr '{}'
+  record >/dev/null
+  cache_file=$(ls "$XDG_CACHE_HOME/git-mr/" | grep -v lock | head -1)
+  printf 'mr\t7$(id)\thttps://git.example.com/m\tok\t\t\n' >"$XDG_CACHE_HOME/git-mr/$cache_file"
+  run "$GIT_MR" --segment=bash "$T/repo"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "security: --url / --open refuse a URL that is not plain http(s)" {
+  gitlab_mr '{"web_url":"file:///Applications/Calculator.app"}'
+  cd "$T/repo"
+  run "$GIT_MR" --url
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not a plain http(s) URL"* ]] || false
+  [[ "$output" != *"file://"* ]] || false
+}
