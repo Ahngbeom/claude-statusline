@@ -136,13 +136,13 @@ rate-limit `resets_at` 도달 / prompt cache `expires_at` 도달(+ 설정 시 `r
 `configure.sh set/get/unset/list/reset/path` CLI로 자신의 표시 설정을 영구 저장할 수 있다.
 `statusline.sh`는 시작 시(`STATUSLINE_CONFIG_FILE` 환경변수로 경로 오버라이드 가능, 기본
 `~/.claude/statusline.conf`) 이 파일을 `KEY=VALUE` 줄 단위로 파싱해 읽는다 — `source`하지 않고
-25개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
+26개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
 있으면 그 키는 건너뛴다** (env var가 항상 config 파일보다 우선). 서브프로세스를 하나도 만들지
 않는다 (순수 bash while-read). `STATUSLINE_COLOR_*`/`STATUSLINE_ICON_*`/`STATUSLINE_THRESHOLD_*`/
-`STATUSLINE_SEP_CHAR`는 이 25개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
+`STATUSLINE_SEP_CHAR`는 이 26개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
 로더를 건드리지 않아도 된다 (`configure.sh`의 4개 레지스트리만 갱신).
 
-25개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
+26개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
 - **presence**: `NO_COLOR`/`STATUSLINE_UNICODE`/`STATUSLINE_HIDE_COST`/`STATUSLINE_PATH_LINK` — `statusline.sh`가 `-z`/`-n`으로
   검사하므로 "켬"은 `KEY=1`을 쓰고 "끔"은 **키 자체를 삭제**해야 한다 (`KEY=0`을 쓰면 `-z`가
   거짓이 되어 오히려 "켬"으로 해석됨 — `configure.sh`가 이 변환을 대신 처리)
@@ -152,7 +152,8 @@ rate-limit `resets_at` 도달 / prompt cache `expires_at` 도달(+ 설정 시 `r
   `STATUSLINE_SHOW_GIT_DETAIL`만 기본값 `0`(opt-in)이라 `configure.sh`의 `_key_default()`에 명시돼 있다
 - **text**: `STATUSLINE_SESSION_CMD` — 임의 문자열이지만 원문 렌더링은 하지 않고
   `_format_session_cmd` 화이트리스트를 통과시키므로 주입 표면이 없다 (`STATUSLINE_ICON_*`/
-  `STATUSLINE_SEP_CHAR`도 같은 `text` 타입이지만 그쪽은 `printf %s` 인자로만 쓰인다는 다른 근거)
+  `STATUSLINE_SEP_CHAR`도 같은 `text` 타입이지만 그쪽은 `printf %s` 인자로만 쓰인다는 다른 근거,
+  `STATUSLINE_THEME`은 알려진 테마 이름과 비교만 하고 출력하지 않는다는 또 다른 근거)
 
 `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`/`STATUSLINE_SHOW_SESSION_CMD=0`은 렌더링만 숨기는 게
 아니라 각각 git 정보 수집(`_gather_git_info`), `get_mem_usage()`, `_gather_session_argv()` 호출 자체를
@@ -170,6 +171,7 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 | 영역 | 마커 | 역할 |
 |------|------|------|
 | 설정 파일 로더 | `# ---- user config file` | `~/.claude/statusline.conf`를 allowlist 기반으로 파싱, env var 우선 |
+| 테마 프리셋 | `# ---- theme presets` | `STATUSLINE_THEME`(현재 `space`)이 비어 있는 `STATUSLINE_COLOR_*`/`ICON_*`/`SEP_CHAR`만 `:=`로 채움. 설정 파일 로더 다음, 색상 변수 앞이어야 개별 설정이 이김 |
 | 색상 변수 | `# ---- pre-computed color variables` | `NO_COLOR` 대응, 서브셸 없이 ANSI 코드 사전 계산 |
 | progress bar 문자 | `# ---- progress bar characters` | `STATUSLINE_UNICODE` 여부로 `▰▱` 또는 `=-` 선택 |
 | compact mode 감지 | `# ---- compact mode detection` | `$COLUMNS`/`STATUSLINE_COMPACT`/`STATUSLINE_COMPACT_WIDTH`로 `is_compact_mode()` 판정, `_compact` 변수에 저장 |
@@ -237,6 +239,7 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 - 위 모든 env var는 `~/.claude/statusline.conf`(`configure.sh`가 관리)로도 설정 가능하며, 이미 설정된 env var가 항상 config 파일 값보다 우선함
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
 - Git 세그먼트는 전체 레이아웃에서 브랜치 뒤 괄호 안에 **단어로 설명된 개수**를 쓴다: `main (3 uncommitted, ↑2 to push, ↓1 to pull)`, `STATUSLINE_SHOW_GIT_DETAIL=1`이면 `main (rebasing, 1 conflicted, 2 staged, 1 modified, 3 untracked, 1 stashed, ↑1 to push)`. 순서는 진행 중인 작업 → 충돌 → 작업 트리 개수 → stash → push/pull(급한 것부터). detached HEAD는 `detached <짧은 해시>`. compact 모드에서만 짧은 기호(`main* ↑2↓1`)를 쓴다 — `+2 ~1 ?3 $1 REBASE` 같은 기호만으로는 의미를 알 수 없다는 사용자 피드백 때문이므로 전체 레이아웃을 기호로 되돌리지 말 것. upstream 미설정 시 push/pull은 조용히 생략됨 (graceful degradation과 동일한 원칙)
+- 테마(`STATUSLINE_THEME`)는 `# ---- theme presets`의 `case`에 `: "${KEY:=값}"` 형태로만 추가한다. 테마가 바꾸는 것은 색·아이콘·구분자뿐이며 git 세그먼트의 단어 표현은 테마로 바꾸지 않는다(위 규칙). `space`의 색 번호와 기호는 [shell-prompt](https://github.com/Ahngbeom/shell-prompt)의 `themes/space.sh`와 같은 세계관을 공유하므로 한쪽을 바꾸면 다른 쪽도 맞출 것. 아이콘은 East Asian Width가 `N`인 문자만 쓴다(`A`는 CJK 설정 터미널에서 2칸이 될 수 있음)
 - `STATUSLINE_PATH_MAX=<chars>`(기본 32, `0`이면 축약 안 함)로 Line 1 경로 축약 기준 길이, `STATUSLINE_PATH_LINK=1`로 경로를 OSC 8 `file://` 링크로 감싸 클릭 시 Finder/탐색기로 열기(opt-in — tmux/SSH가 시퀀스를 지우거나 문서가 경고하는 이스케이프 깨짐 위험 때문, `STATUSLINE_HYPERLINKS=0`이면 함께 꺼짐). 표시용 `current_dir`(`~` 치환·축약)과 원본 `current_dir_raw`는 분리되어 있으며 JSONL fallback 경로 계산과 링크는 반드시 원본을 쓸 것
 - 지속 애니메이션(스피너, 깜빡임)은 넣지 않는다: 프레임 하나가 스크립트 한 번 실행이고 최소 간격이 1초(`refreshInterval`)이며 새 트리거가 오면 실행이 취소되므로 끊겨 보이고, 문서도 이스케이프가 많은 여러 줄 출력이 깨질 수 있다고 경고한다. 변화를 보여주는 수단은 직전 질문 변화량(`STATUSLINE_SHOW_DELTA`)이다
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback

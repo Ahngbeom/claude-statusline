@@ -36,7 +36,7 @@ _statusline_bin() {
 
 # ---- key registry ----
 # Every recognized key, grouped the same way as the interactive menu.
-ALL_KEYS="NO_COLOR STATUSLINE_UNICODE STATUSLINE_COMPACT STATUSLINE_COMPACT_WIDTH \
+ALL_KEYS="STATUSLINE_THEME NO_COLOR STATUSLINE_UNICODE STATUSLINE_COMPACT STATUSLINE_COMPACT_WIDTH \
 STATUSLINE_HIDE_COST STATUSLINE_MAX_CONTEXT STATUSLINE_SEP_CHAR \
 STATUSLINE_PATH_MAX STATUSLINE_PATH_LINK \
 STATUSLINE_SHOW_GIT STATUSLINE_SHOW_GIT_STATUS STATUSLINE_SHOW_GIT_DETAIL STATUSLINE_SHOW_CC_VERSION STATUSLINE_SHOW_OUTPUT_STYLE STATUSLINE_SHOW_MEM \
@@ -63,7 +63,7 @@ STATUSLINE_THRESHOLD_SESSION_WARN STATUSLINE_THRESHOLD_SESSION_CRIT"
 # Each entry is "Title|KEY1 KEY2 KEY3 ...". Order here is the order shown in
 # both UIs.
 CATEGORY_DEFS=(
-  "Colors & bar style|NO_COLOR STATUSLINE_UNICODE STATUSLINE_SEP_CHAR"
+  "Colors & bar style|STATUSLINE_THEME NO_COLOR STATUSLINE_UNICODE STATUSLINE_SEP_CHAR"
   "Compact mode|STATUSLINE_COMPACT STATUSLINE_COMPACT_WIDTH"
   "Cost & context|STATUSLINE_HIDE_COST STATUSLINE_MAX_CONTEXT"
   "Directory (path length, clickable link)|STATUSLINE_PATH_MAX STATUSLINE_PATH_LINK"
@@ -94,7 +94,8 @@ CATEGORY_DEFS=(
 #   surface to validate against. STATUSLINE_SESSION_CMD is `text` for a
 #   different reason: it is never rendered as-is at all, only fed through
 #   statusline.sh's _format_session_cmd flag whitelist, which drops anything
-#   outside [A-Za-z0-9._-] before it can reach the screen.
+#   outside [A-Za-z0-9._-] before it can reach the screen. STATUSLINE_THEME
+#   is only ever compared against known theme names, never printed.
 # percent: a color-threshold cutoff, 0-100.
 _key_type() {
   case "$1" in
@@ -114,7 +115,7 @@ _key_type() {
     STATUSLINE_COLOR_SESSION_CMD|STATUSLINE_COLOR_DELTA) echo color256 ;;
     STATUSLINE_ICON_DIR|STATUSLINE_ICON_CONTEXT|STATUSLINE_ICON_COST|STATUSLINE_ICON_CACHE|STATUSLINE_ICON_MEM|\
     STATUSLINE_ICON_SESSION_CMD|STATUSLINE_SESSION_CMD|\
-    STATUSLINE_SEP_CHAR) echo text ;;
+    STATUSLINE_SEP_CHAR|STATUSLINE_THEME) echo text ;;
     STATUSLINE_THRESHOLD_CTX_WARN|STATUSLINE_THRESHOLD_CTX_CRIT|\
     STATUSLINE_THRESHOLD_MEM_WARN|STATUSLINE_THRESHOLD_MEM_CRIT|\
     STATUSLINE_THRESHOLD_SESSION_WARN|STATUSLINE_THRESHOLD_SESSION_CRIT) echo percent ;;
@@ -131,6 +132,7 @@ _key_default() {
     STATUSLINE_MAX_CONTEXT) echo "(model-based)" ;;
     STATUSLINE_PATH_MAX) echo 32 ;;
     STATUSLINE_SEP_CHAR) echo "│" ;;
+    STATUSLINE_THEME) echo default ;;
     STATUSLINE_SESSION_CMD) echo "(auto-detected)" ;;
     STATUSLINE_COLOR_DIR) echo 117 ;;
     STATUSLINE_COLOR_MODEL) echo 147 ;;
@@ -182,6 +184,7 @@ _key_description() {
     STATUSLINE_HIDE_COST) echo "Hide session cost (Line 2) and all of Line 3" ;;
     STATUSLINE_MAX_CONTEXT) echo "Override JSONL-fallback context window size (tokens)" ;;
     STATUSLINE_SEP_CHAR) echo "Separator character between segments (all lines)" ;;
+    STATUSLINE_THEME) echo "Preset colors, icons and separator: default or space (individual settings still win)" ;;
     STATUSLINE_PATH_MAX) echo "Line 1: shorten the directory beyond this many chars (0 = never)" ;;
     STATUSLINE_PATH_LINK) echo "Line 1: make the directory Cmd/Ctrl+clickable (opens Finder/Explorer)" ;;
     STATUSLINE_SHOW_GIT) echo "Line 1: git branch segment" ;;
