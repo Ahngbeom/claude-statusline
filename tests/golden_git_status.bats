@@ -37,7 +37,7 @@ setup_repo_with_upstream() {
   rm -rf "$base"
 }
 
-@test "golden: dirty working tree appends * to the branch name" {
+@test "golden: dirty working tree shows the uncommitted file count in words" {
   base="$(mktemp -d)"
   setup_repo_with_upstream "$base"
   echo "uncommitted change" >>"$base/work/file.txt"
@@ -45,7 +45,7 @@ setup_repo_with_upstream() {
   run run_statusline_in "$base/work" "$JSON"
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main*  │"* ]]
+  [[ "$line1" == *"  main (1 uncommitted)  │"* ]]
 
   rm -rf "$base"
 }
@@ -54,11 +54,12 @@ setup_repo_with_upstream() {
   base="$(mktemp -d)"
   setup_repo_with_upstream "$base"
   echo "new" >"$base/work/untracked.txt"
+  echo "change" >>"$base/work/file.txt"
 
   run run_statusline_in "$base/work" "$JSON"
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main*  │"* ]]
+  [[ "$line1" == *"  main (2 uncommitted)  │"* ]]
 
   rm -rf "$base"
 }
@@ -74,7 +75,7 @@ setup_repo_with_upstream() {
   run run_statusline_in "$base/work" "$JSON"
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main ↑2  │"* ]]
+  [[ "$line1" == *"  main (↑2 to push)  │"* ]]
 
   rm -rf "$base"
 }
@@ -94,7 +95,35 @@ setup_repo_with_upstream() {
   run run_statusline_in "$base/work" "$JSON"
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main ↓1  │"* ]]
+  [[ "$line1" == *"  main (↓1 to pull)  │"* ]]
+
+  rm -rf "$base"
+}
+
+@test "golden: compact mode keeps the terse */↑N markers" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  echo "two" >>"$base/work/file.txt"
+  git -C "$base/work" commit --quiet -am "second"
+  echo "dirty" >>"$base/work/file.txt"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_COMPACT=1
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [ "$line1" = "📂 proj  main* ↑1  │ Opus 4.6" ]
+
+  rm -rf "$base"
+}
+
+@test "golden: STATUSLINE_SHOW_GIT_STATUS=0 hides the labelled counts" {
+  base="$(mktemp -d)"
+  setup_repo_with_upstream "$base"
+  echo "dirty" >>"$base/work/file.txt"
+
+  run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_STATUS=0
+  [ "$status" -eq 0 ]
+  line1="$(sed -n '1p' <<<"$output")"
+  [[ "$line1" == *"  main  │"* ]]
 
   rm -rf "$base"
 }
@@ -144,7 +173,7 @@ EOF
   rm -rf "$base"
 }
 
-@test "golden: detail mode counts staged, modified, untracked and stash instead of *" {
+@test "golden: detail mode names staged, modified, untracked and stashed counts" {
   base="$(mktemp -d)"
   setup_repo_with_upstream "$base"
   echo "stashed" >>"$base/work/file.txt"
@@ -157,7 +186,7 @@ EOF
   run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main +1 ~1 ?1 \$1  │"* ]]
+  [[ "$line1" == *"  main (1 staged, 1 modified, 1 untracked, 1 stashed)  │"* ]]
 
   rm -rf "$base"
 }
@@ -171,12 +200,12 @@ EOF
   run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main ?2  │"* ]]
+  [[ "$line1" == *"  main (2 untracked)  │"* ]]
 
   rm -rf "$base"
 }
 
-@test "golden: detail mode keeps ahead/behind before the counts" {
+@test "golden: detail mode lists working-tree counts before push/pull" {
   base="$(mktemp -d)"
   setup_repo_with_upstream "$base"
   echo "two" >>"$base/work/file.txt"
@@ -186,12 +215,12 @@ EOF
   run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main ↑1 ~1  │"* ]]
+  [[ "$line1" == *"  main (1 modified, ↑1 to push)  │"* ]]
 
   rm -rf "$base"
 }
 
-@test "golden: detail mode shows a merge conflict count and the MERGE state" {
+@test "golden: detail mode leads with the merge in progress and the conflict count" {
   base="$(mktemp -d)"
   setup_repo_with_upstream "$base"
   git -C "$base/work" branch side
@@ -206,7 +235,7 @@ EOF
   run run_statusline_in "$base/work" "$JSON" STATUSLINE_SHOW_GIT_DETAIL=1
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  main ↑1 !1 MERGE  │"* ]]
+  [[ "$line1" == *"  main (merging, 1 conflicted, ↑1 to push)  │"* ]]
 
   rm -rf "$base"
 }
@@ -237,7 +266,7 @@ EOF
   rm -rf "$base"
 }
 
-@test "golden: detached HEAD shows the short commit hash" {
+@test "golden: detached HEAD shows 'detached <short hash>'" {
   base="$(mktemp -d)"
   setup_repo_with_upstream "$base"
   git -C "$base/work" switch --quiet --detach HEAD
@@ -246,7 +275,7 @@ EOF
   run run_statusline_in "$base/work" "$JSON"
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"  ${sha:0:7}  │"* ]]
+  [[ "$line1" == *"  detached ${sha:0:7}  │"* ]]
 
   rm -rf "$base"
 }

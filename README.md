@@ -17,8 +17,8 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 
 | Line | Content / 내용 |
 |------|----------------|
-| 1 | 📂 Directory + Git branch (dirty `*`, ahead/behind `↑↓`, optional counts) + PR/MR `!289 ✔` (clickable) │ Model, CLI version, Output style, ⌘ Session launch flags │ 💻 Memory |
-| 2 | 🧠 Context usage (bar) │ Session time + tokens + cost │ 🗄 Cache + Speed |
+| 1 | 📂 Directory (shortened when long) + Git branch (uncommitted files, commits to push/pull, optional breakdown) + PR/MR `!289 ✔` (clickable) │ Model, CLI version, Output style, ⌘ Session launch flags │ 💻 Memory |
+| 2 | 🧠 Context usage (bar, + last prompt's change) │ Session time + tokens + cost (+ last prompt's cost) │ 🗄 Cache + Speed |
 | 3 | 💰 Today │ Week │ Month usage & costs |
 
 On narrow terminals (e.g. a portrait tablet/mobile-style split pane), the layout above automatically
@@ -30,14 +30,24 @@ shrinks — see "Compact Mode" under Customization below.
 ### Example Output / 예시 출력
 
 ```
-📂 ~/projects/myapp  main* ↑2 │ Opus 4.6  v1.0.44  explanatory  ⌘ -c plan │ 💻 Mem 42%
-🧠 Context 45.2K/200K [============--------] 77% │ Session 1.2M $0.12  3h 42m [====------] │ 🗄 87%  12.5K/m
+📂 ~/projects/myapp  main (3 uncommitted, ↑2 to push) │ Opus 4.6  v1.0.44  explanatory  ⌘ -c plan │ 💻 Mem 42%
+🧠 Context 45.2K/200K [============--------] 77% +4.2K │ Session 1.2M $0.12 +$0.03  3h 42m [====------] │ 🗄 87%  12.5K/m
 💰 Today 2.1M  $4.32 │ Week 15.8M  $31.20 │ Month 48.2M  $95.50
 ```
 
-`main*` means uncommitted changes are present; `↑2`/`↓1` show commits ahead/behind the upstream branch (both omitted when there's nothing to report).
+- `3 uncommitted`: files with changes not yet committed (modified, staged, or untracked).
+- `↑2 to push` / `↓1 to pull`: commits your branch is ahead of / behind its upstream.
+- `detached a1b2c3d` replaces the branch name when HEAD is not on a branch.
+- Each part is omitted when there's nothing to report. `STATUSLINE_SHOW_GIT_DETAIL=1` splits `uncommitted` into staged/modified/... (see "Git Detail & PR/MR"). Compact mode uses the short forms `main* ↑2↓1`.
 
-`main*`는 커밋되지 않은 변경사항이 있음을, `↑2`/`↓1`은 upstream 브랜치 대비 앞서거나 뒤처진 커밋 수를 의미합니다 (보고할 내용이 없으면 생략).
+- `3 uncommitted`: 아직 커밋하지 않은 변경 파일 수 (수정, 스테이징, 추적 안 된 파일 포함).
+- `↑2 to push` / `↓1 to pull`: upstream보다 앞선(push할) / 뒤처진(pull할) 커밋 수.
+- HEAD가 브랜치 위에 있지 않으면 브랜치명 대신 `detached a1b2c3d`로 표시됩니다.
+- 보고할 내용이 없으면 각 부분은 생략됩니다. `STATUSLINE_SHOW_GIT_DETAIL=1`이면 `uncommitted`를 staged/modified 등으로 나눠 보여 줍니다("Git 상세·PR/MR" 참고). 축약 모드에서는 `main* ↑2↓1` 형태의 짧은 표기를 씁니다.
+
+`+4.2K` / `+$0.03` are how much context and cost your last prompt added, counting every step Claude took to answer it — see "Last-prompt change" below.
+
+`+4.2K` / `+$0.03`은 직전 질문 하나가 늘린 컨텍스트와 비용입니다. Claude가 답하느라 거친 모든 단계를 합친 값입니다 — 아래 "직전 질문 변화량" 참고.
 
 `⌘ -c plan` means this session was started with `claude -c --permission-mode plan` — see "Session Launch Flags" below. The whole segment is omitted when the session was started with plain `claude`.
 
@@ -271,6 +281,8 @@ Use `configure.sh` above, or edit `~/.claude/statusline.sh` directly for anythin
 | `STATUSLINE_COMPACT_WIDTH=<cols>` | Auto-compact trigger threshold, default `80` — compact mode kicks in when `$COLUMNS` is below this / 자동 축약 전환 기준 폭 (기본값 80) |
 | `STATUSLINE_CONFIG_FILE=<path>` | Override the `~/.claude/statusline.conf` path read/written by `configure.sh` / `configure.sh`가 읽고 쓰는 설정 파일 경로 오버라이드 |
 | `STATUSLINE_SESSION_CMD=<cmd>` | Override the auto-detected launch command, e.g. `claude -c` — see "Session Launch Flags" below / 자동 감지된 기동 명령어를 직접 지정 (아래 "세션 기동 옵션" 참고) |
+| `STATUSLINE_PATH_MAX=<chars>` | Shorten the Line 1 directory beyond this length, default `32`; `0` never shortens — see "Long Paths" below / Line 1 디렉터리를 이 길이 넘으면 축약 (기본값 32, `0`이면 축약 안 함) |
+| `STATUSLINE_PATH_LINK=1` | Make the Line 1 directory Cmd/Ctrl+clickable to open it in Finder/Explorer / Line 1 디렉터리를 클릭해서 Finder/탐색기로 열기 |
 
 ### Per-line Display Toggles / 라인별 표시 토글
 
@@ -281,9 +293,9 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 | Variable | Hides |
 |----------|-------|
 | `STATUSLINE_SHOW_GIT=0` | Line 1 git branch segment entirely / Line 1 git 브랜치 세그먼트 전체 |
-| `STATUSLINE_SHOW_GIT_STATUS=0` | Only the dirty(`*`)/ahead-behind(`↑↓`) markers (branch name stays) / dirty·ahead-behind 표시만 (브랜치명은 유지) |
+| `STATUSLINE_SHOW_GIT_STATUS=0` | Only the `(3 uncommitted, ↑2 to push)` part (branch name stays) / 괄호 안 개수만 (브랜치명은 유지) |
 | `STATUSLINE_SHOW_PR=0` | Line 1 PR/MR number and pipeline mark / Line 1 PR/MR 번호와 파이프라인 표시 |
-| `STATUSLINE_HYPERLINKS=0` | Only the links on the PR/MR number and pipeline mark (text stays) / PR/MR·파이프라인 링크만 (글자는 유지) |
+| `STATUSLINE_HYPERLINKS=0` | Only the links on the PR/MR number, pipeline mark and directory (text stays) / PR/MR·파이프라인·디렉터리 링크만 (글자는 유지) |
 | `STATUSLINE_SHOW_CC_VERSION=0` | Line 1 CLI version (`v1.0.44`) |
 | `STATUSLINE_SHOW_OUTPUT_STYLE=0` | Line 1 output style |
 | `STATUSLINE_SHOW_MEM=0` | Line 1 `💻 Mem NN%` |
@@ -291,6 +303,7 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 | `STATUSLINE_SHOW_SESSION=0` | Line 2 Session segment (tokens/cost/time/bar) |
 | `STATUSLINE_SHOW_CACHE=0` | Line 2 `🗄 NN%` cache hit rate |
 | `STATUSLINE_SHOW_SPEED=0` | Line 2 tokens/min |
+| `STATUSLINE_SHOW_DELTA=0` | Line 2 last-prompt change (`+4.2K`, `+$0.03`); also stops writing `~/.claude/statusline-state/` / 직전 질문 변화량 (상태 파일 쓰기도 중단) |
 | `STATUSLINE_SHOW_TODAY=0` | Line 3 Today |
 | `STATUSLINE_SHOW_WEEK=0` | Line 3 Week |
 | `STATUSLINE_SHOW_MONTH=0` | Line 3 Month |
@@ -406,21 +419,22 @@ Linux는 서브프로세스 0개(`/proc/<pid>/cmdline`), macOS/BSD는 통상 `ps
 
 ### Git Detail & PR/MR / Git 상세·PR/MR
 
-**Git detail** — `STATUSLINE_SHOW_GIT_DETAIL=1` replaces the `*` marker with counts (full layout only;
-compact mode keeps `*`):
+**Git detail** — `STATUSLINE_SHOW_GIT_DETAIL=1` splits `N uncommitted` into what kind of change each
+file has (full layout only; compact mode keeps `*`). The most urgent state comes first:
 
-`STATUSLINE_SHOW_GIT_DETAIL=1`이면 `*` 대신 개수를 표시합니다 (전체 레이아웃만, 축약 모드는 `*` 유지):
+`STATUSLINE_SHOW_GIT_DETAIL=1`이면 `N uncommitted`를 변경 종류별로 나눠 보여 줍니다(전체 레이아웃만,
+축약 모드는 `*` 유지). 가장 급한 상태가 앞에 옵니다:
 
 ```
-main ↑1↓2 +2 ~1 ?3 !1 $1 REBASE
+main (rebasing, 1 conflicted, 2 staged, 1 modified, 3 untracked, 1 stashed, ↑1 to push, ↓2 to pull)
 ```
 
-| Mark | Meaning / 의미 |
+| Word | Meaning / 의미 |
 |------|----------------|
-| `↑N` `↓N` | ahead / behind upstream |
-| `+N` `~N` `?N` `!N` | staged / modified / untracked / conflicted entries, counted the way `git status` lists them: a new untracked directory is one entry, and `status.showUntrackedFiles` is honored / `git status`가 보여 주는 항목 기준 (새 untracked 디렉터리는 1개, `status.showUntrackedFiles` 설정을 따름) |
-| `$N` | stash entries |
-| `REBASE` `MERGE` `CHERRY-PICK` `REVERT` `BISECT` | operation in progress / 진행 중인 작업 |
+| `rebasing` `merging` `cherry-picking` `reverting` `bisecting` | operation in progress / 진행 중인 작업 |
+| `N conflicted` `N staged` `N modified` `N untracked` | entries counted the way `git status` lists them: a new untracked directory is one entry, and `status.showUntrackedFiles` is honored / `git status`가 보여 주는 항목 기준 (새 untracked 디렉터리는 1개, `status.showUntrackedFiles` 설정을 따름). A file both staged and modified counts in both / 스테이징 후 다시 수정한 파일은 양쪽에 셈 |
+| `N stashed` | stash entries / stash 개수 |
+| `↑N to push` `↓N to pull` | commits ahead / behind upstream / upstream 대비 앞선·뒤처진 커밋 |
 
 **PR/MR** — when the current branch has an open pull request (GitHub) or merge request (GitLab,
 including self-managed), Line 1 shows its number right after the branch: `#12` / `!289`. The data is the
@@ -496,6 +510,54 @@ for what each tier means.
 |----------|---------|--------|
 | `STATUSLINE_SEP_CHAR` | `│` | Replaces the separator character between segments on every line / 모든 라인의 세그먼트 구분자 문자 교체 |
 
+### Long Paths / 긴 경로
+
+When the directory is longer than `STATUSLINE_PATH_MAX` (default 32), folder names are shortened
+from the left, one at a time, until it fits. The folder you're in and the project folder
+(`workspace.project_dir`) always stay whole. If that's still too long, everything before the project
+folder becomes `…`, and as a last resort only the end of the path is shown.
+
+디렉터리가 `STATUSLINE_PATH_MAX`(기본값 32)보다 길면 왼쪽 폴더명부터 하나씩 첫 글자로 줄여 길이에
+맞춥니다. 현재 폴더와 프로젝트 폴더(`workspace.project_dir`)는 항상 그대로 둡니다. 그래도 길면
+프로젝트 폴더 앞부분을 `…`로 바꾸고, 최후에는 경로 끝부분만 보여줍니다.
+
+```
+~/personal/claude-statusline              fits, unchanged / 그대로
+~/w/m/mobidoc-server/s/m/j/u/api          shortened, project kept / 축약, 프로젝트명 유지
+…/mobidoc-server/s/m/j/u/api              prefix dropped / 앞부분 생략
+```
+
+**Open in Finder/Explorer:** with `STATUSLINE_PATH_LINK=1`, the directory becomes an
+[OSC 8](https://code.claude.com/docs/en/statusline) `file://` link to the full path. Cmd+click
+(macOS) or Ctrl+click (Windows/Linux) opens the folder with your system's default app; hovering shows
+the full path. Requires a terminal with hyperlink support (iTerm2, Kitty, WezTerm, ...). tmux and SSH
+may strip the link — the text still shows, it just isn't clickable. Off by default.
+
+**Finder/탐색기로 열기:** `STATUSLINE_PATH_LINK=1`이면 디렉터리가 전체 경로를 가리키는 `file://`
+링크가 됩니다. Cmd+클릭(macOS) 또는 Ctrl+클릭(Windows/Linux)하면 시스템 기본 앱으로 폴더가 열리고,
+마우스를 올리면 전체 경로가 보입니다. 하이퍼링크를 지원하는 터미널(iTerm2, Kitty, WezTerm 등)이
+필요하며, tmux/SSH에서는 링크가 제거될 수 있습니다(글자는 그대로 보이고 클릭만 안 됨). 기본값은 꺼짐.
+
+### Last-prompt change / 직전 질문 변화량
+
+After `%` on the Context bar and after the Session cost, a dim `+4.2K` / `+$0.03` shows how much your
+last prompt added. One prompt usually takes several steps (reading files, running commands); the
+change covers all of them and grows while Claude is still working. It stays until your next prompt
+changes it, and is negative (`-120.0K`) after `/compact`. Requires Claude Code's `prompt_id` stdin
+field; without it, the change covers only the latest step. Hidden in compact mode.
+
+Context 바의 `%` 뒤와 Session 비용 뒤에 흐린 색으로 `+4.2K` / `+$0.03`이 붙어, 직전 질문이 늘린
+양을 보여줍니다. 질문 하나에는 보통 여러 단계(파일 읽기, 명령 실행)가 있는데, 변화량은 그 전체를
+합친 값이며 Claude가 작업하는 동안 계속 커집니다. 다음 질문이 값을 바꿀 때까지 유지되고,
+`/compact` 후에는 음수(`-120.0K`)가 됩니다. Claude Code의 `prompt_id` stdin 필드가 필요하며, 없으면
+마지막 단계 하나의 변화량만 보여줍니다. 축약 모드에서는 표시하지 않습니다.
+
+Per-session state lives in `~/.claude/statusline-state/` (one small file per session, pruned after 7
+days idle). `STATUSLINE_SHOW_DELTA=0` turns this off entirely.
+
+세션별 상태는 `~/.claude/statusline-state/`에 저장됩니다 (세션당 작은 파일 하나, 7일간 변경 없으면
+정리). `STATUSLINE_SHOW_DELTA=0`이면 완전히 꺼집니다.
+
 ### Compact Mode / 축약 모드
 
 Claude Code >= v2.1.153 sets `$COLUMNS`/`$LINES` to the real terminal size before running the
@@ -514,7 +576,7 @@ Claude Code >= v2.1.153는 스크립트 실행 직전에 `$COLUMNS`/`$LINES`를 
 수·Week/Month·캐시 적중률/속도는 생략됩니다.
 
 ```
-📂 myapp  main*↑2 │ Opus 4.6
+📂 myapp  main* ↑2 │ Opus 4.6
 🧠 45.2K/200K [====----] 77%
 💰 Sess $0.12 3h 42m │ Today $4.32
 ```
@@ -525,13 +587,15 @@ to the full layout shown above — same graceful-degradation contract as the res
 구버전 Claude Code이거나 `$COLUMNS`가 없을 때(수동 테스트 등)는 위의 전체 레이아웃으로 조용히
 폴백됩니다 — 이 스크립트의 다른 부분과 동일한 graceful-degradation 원칙을 따릅니다.
 
-**Resizing mid-session:** Claude Code only re-runs the statusline script on specific triggers — a new
-assistant message, `/compact` finishing, a permission-mode change, or a vim-mode toggle. A bare
-terminal resize with none of those isn't one of them, so the layout can keep showing the old width
-until the next trigger fires (confirmed by testing: resizing alone, with no message sent, does not
-update the statusline). If you want it to react to a resize on its own, add `refreshInterval` (seconds,
-minimum `1`) to `statusLine` in `~/.claude/settings.json` so it re-runs on a timer regardless of
-triggers:
+**Resizing mid-session and live updates:** Claude Code re-runs the statusline script only on
+[specific triggers](https://code.claude.com/docs/en/statusline): session start, a new assistant
+message, `/compact` finishing, a permission-mode change, a vim-mode toggle, a change to the
+`statusLine` command, a rate-limit window reaching its `resets_at`, or a warm prompt cache reaching its
+`expires_at`. A bare terminal resize isn't one of them, so the layout can keep the old width until the
+next trigger (confirmed by testing). The same applies to values that change with time while you're
+idle: Session time remaining, Mem %, git changes made outside Claude, and fresh ccusage totals (they're
+fetched in the background and appear on the following run). To keep these current, add
+`refreshInterval` (seconds, minimum `1`) to `statusLine` in `~/.claude/settings.json`:
 
 ```json
 {
@@ -543,17 +607,19 @@ triggers:
 }
 ```
 
-This re-runs the script every N seconds even while idle (extra background git/ccusage calls), so only
-enable it if you need that responsiveness.
+This re-runs the whole script every N seconds even while idle — about 0.1 s of git/jq work per run on
+an M-series Mac — so pick the slowest interval you're happy with.
 
-**세션 도중 리사이즈:** Claude Code는 새 assistant 메시지, `/compact` 완료, permission mode 변경,
-vim mode 토글 — 이 네 가지 트리거가 있을 때만 statusline 스크립트를 재실행합니다. 이 중 아무 것도
-없이 터미널 폭만 조정하면 다음 트리거가 발생하기 전까지 레이아웃이 그대로 유지될 수 있습니다
-(실측 확인: 메시지 전송 없이 리사이즈만 해서는 statusline이 바뀌지 않음). 리사이즈에 즉시 반응하게
-하려면 `~/.claude/settings.json`의 `statusLine`에 `refreshInterval`(초 단위, 최소 `1`)을 추가해
-트리거와 무관하게 주기적으로 재실행되게 하세요(위 JSON 예시 참고). 유휴 상태에서도 N초마다
-스크립트가 다시 실행되어(git/ccusage 조회 포함) 백그라운드 부하가 약간 늘어나므로, 필요할 때만
-켜는 것을 권장합니다.
+**세션 도중 리사이즈와 실시간 반영:** Claude Code는 정해진
+[트리거](https://code.claude.com/docs/en/statusline)가 있을 때만 statusline 스크립트를 다시 실행합니다:
+세션 시작, 새 assistant 메시지, `/compact` 완료, permission mode 변경, vim mode 토글, `statusLine`
+명령 변경, rate-limit 윈도우의 `resets_at` 도달, prompt cache의 `expires_at` 도달. 터미널 폭만
+바꾸는 것은 트리거가 아니어서 다음 트리거 전까지 이전 레이아웃이 유지될 수 있습니다(실측 확인).
+유휴 중에 시간에 따라 바뀌는 값도 마찬가지입니다: Session 남은 시간, Mem %, Claude 밖에서 바꾼 git
+변경, 새 ccusage 집계(백그라운드에서 받아 다음 실행 때 반영). 이 값들을 계속 최신으로 유지하려면
+`~/.claude/settings.json`의 `statusLine`에 `refreshInterval`(초 단위, 최소 `1`)을 추가하세요(위 JSON
+예시 참고). 유휴 중에도 N초마다 스크립트 전체가 실행되므로(M 시리즈 Mac 기준 실행당 git/jq 작업 약
+0.1초) 만족할 수 있는 가장 긴 간격을 고르세요.
 
 ### Modify Progress Bar Width / 프로그레스 바 너비 수정
 

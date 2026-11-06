@@ -56,6 +56,7 @@ Claude Code CLI → stdin(세션 JSON) → statusline.sh → stdout(3줄 ANSI �
 | git-mr 캐시 | `bin/git-mr --cached` (`$XDG_CACHE_HOME/git-mr/`, TTL 120초, 백그라운드 갱신) | Line 1 (파이프라인 표시) | `pr`과 같은 PR/MR일 때만 |
 | 부모 프로세스 argv | `/proc/<pid>/cmdline` (Linux) 또는 `ps -o ppid=,args=` (macOS/BSD) | Line 1 (세션 기동 CLI 플래그) | — |
 | 사용자 설정 파일 | `~/.claude/statusline.conf` (`configure.sh`가 씀) | 전체 (표시 여부/색상/compact 등) | env var보다 후순위 |
+| 세션별 상태 파일 | `~/.claude/statusline-state/<session_id>` (이 스크립트가 직접 씀) | Line 2 (직전 질문 변화량 `+4.2K`/`+$0.03`) | — |
 
 `statusline.sh`는 stdout 3줄 외에 side-channel 출력도 하나 만든다: stdin의 `rate_limits`(있으면)를
 그대로 `~/.claude/rate-limits-cache.json`에 써서 남긴다. 이 스크립트 자신은 이 값을 렌더링에 쓰지
@@ -98,6 +99,12 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 `worktree.*`(`--worktree`), `workspace.added_dirs`(`--add-dir`), `session_name`(`--name`//`rename`),
 `fast_mode`, `effort.level`, `thinking.enabled`, `vim.mode` 정도이며 현재 이 스크립트는 쓰지 않는다.
 
+`workspace.project_dir`(세션을 시작한 디렉터리)와 `prompt_id`(처리 중인 사용자 프롬프트 UUID, 첫 입력
+전에는 없음)는 공식 문서 스키마에 있고 이 스크립트가 쓴다: 전자는 경로 축약 때 프로젝트 폴더명을
+보존하는 기준, 후자는 변화량을 질문 단위로 묶는 키. 실제 페이로드에 `prompt_id`가 오는지는 아직
+실측하지 않았다 — 위 공통 훅 헬퍼가 인자 없이 호출된다는 관찰과 같은 이유로 빠질 수도 있으므로,
+없으면 변화량이 "마지막 단계 하나" 단위로 조용히 폴백하도록 되어 있다.
+
 `rate_limits`는 Claude.ai Pro/Max 구독자에 한해, 세션 중 첫 API 응답 이후부터 제공된다(API 키
 사용자나 첫 응답 이전에는 없거나 `five_hour`/`seven_day` 중 한쪽만 있을 수 있음). `used_percentage`는
 0~100, `resets_at`은 그 윈도우가 리셋되는 UTC epoch초. `statusline.sh`는 이 값을 렌더링에 쓰지 않고
@@ -113,8 +120,10 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 전체 레이아웃으로 조용히 폴백한다.
 
 `is_compact_mode()`는 stateless라 실행될 때마다 항상 그 시점 `$COLUMNS`를 정확히 판정하지만, 실행
-자체는 Claude Code가 트리거해야 일어난다. 공식 문서 기준 재실행 트리거는 새 assistant 메시지 /
-`/compact` 완료 / permission mode 변경 / vim mode 토글 네 가지(+ 설정 시 `refreshInterval` 타이머)뿐이고
+자체는 Claude Code가 트리거해야 일어난다. 공식 문서 기준(2026-11 확인) 재실행 트리거는 세션 시작 /
+새 assistant 메시지 / `/compact` 완료 / permission mode 변경 / vim mode 토글 / `statusLine` 명령 변경 /
+rate-limit `resets_at` 도달 / prompt cache `expires_at` 도달(+ 설정 시 `refreshInterval` 타이머)이고,
+300ms 디바운스가 걸리며 실행 중에 새 트리거가 오면 진행 중인 스크립트는 **취소**된다.
 **순수 터미널 리사이즈는 이 목록에 없다** — 실측으로 확인됨: 세션 도중 다른 트리거 없이 창 폭만
 줄이면 statusline이 즉시 바뀌지 않고 다음 트리거까지 이전 레이아웃을 유지한다. 이는 `statusline.sh`
 버그가 아니라 Claude Code 호스트의 재실행 스케줄링 특성이라 스크립트 쪽에서 고칠 수 없다 — 즉시
@@ -127,19 +136,19 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 `configure.sh set/get/unset/list/reset/path` CLI로 자신의 표시 설정을 영구 저장할 수 있다.
 `statusline.sh`는 시작 시(`STATUSLINE_CONFIG_FILE` 환경변수로 경로 오버라이드 가능, 기본
 `~/.claude/statusline.conf`) 이 파일을 `KEY=VALUE` 줄 단위로 파싱해 읽는다 — `source`하지 않고
-22개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
+25개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
 있으면 그 키는 건너뛴다** (env var가 항상 config 파일보다 우선). 서브프로세스를 하나도 만들지
 않는다 (순수 bash while-read). `STATUSLINE_COLOR_*`/`STATUSLINE_ICON_*`/`STATUSLINE_THRESHOLD_*`/
-`STATUSLINE_SEP_CHAR`는 이 22개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
+`STATUSLINE_SEP_CHAR`는 이 25개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
 로더를 건드리지 않아도 된다 (`configure.sh`의 4개 레지스트리만 갱신).
 
-22개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
-- **presence**: `NO_COLOR`/`STATUSLINE_UNICODE`/`STATUSLINE_HIDE_COST` — `statusline.sh`가 `-z`/`-n`으로
+25개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
+- **presence**: `NO_COLOR`/`STATUSLINE_UNICODE`/`STATUSLINE_HIDE_COST`/`STATUSLINE_PATH_LINK` — `statusline.sh`가 `-z`/`-n`으로
   검사하므로 "켬"은 `KEY=1`을 쓰고 "끔"은 **키 자체를 삭제**해야 한다 (`KEY=0`을 쓰면 `-z`가
   거짓이 되어 오히려 "켬"으로 해석됨 — `configure.sh`가 이 변환을 대신 처리)
 - **tristate**: `STATUSLINE_COMPACT` — `1`/`0`/키 삭제(`$COLUMNS` 자동 감지로 복귀) 3가지
-- **numeric**: `STATUSLINE_COMPACT_WIDTH`, `STATUSLINE_MAX_CONTEXT`
-- **bool**: `STATUSLINE_SHOW_*` 14개 + `STATUSLINE_HYPERLINKS` — 값 기반, 기본값 `1`(표시), `0`이면 숨김.
+- **numeric**: `STATUSLINE_COMPACT_WIDTH`, `STATUSLINE_MAX_CONTEXT`, `STATUSLINE_PATH_MAX`
+- **bool**: `STATUSLINE_SHOW_*` 15개 + `STATUSLINE_HYPERLINKS` — 값 기반, 기본값 `1`(표시), `0`이면 숨김.
   `STATUSLINE_SHOW_GIT_DETAIL`만 기본값 `0`(opt-in)이라 `configure.sh`의 `_key_default()`에 명시돼 있다
 - **text**: `STATUSLINE_SESSION_CMD` — 임의 문자열이지만 원문 렌더링은 하지 않고
   `_format_session_cmd` 화이트리스트를 통과시키므로 주입 표면이 없다 (`STATUSLINE_ICON_*`/
@@ -148,7 +157,8 @@ detection` 섹션과 README "Compact Mode" 참고. 구버전 Claude Code나 `$CO
 `STATUSLINE_SHOW_GIT=0`/`STATUSLINE_SHOW_MEM=0`/`STATUSLINE_SHOW_SESSION_CMD=0`은 렌더링만 숨기는 게
 아니라 각각 git 정보 수집(`_gather_git_info`), `get_mem_usage()`, `_gather_session_argv()` 호출 자체를
 건너뛰어 서브프로세스를 아낀다 (compact 모드는 Mem과 세션 기동 옵션을 원래 렌더링하지 않으므로 둘 다
-`_compact=1`이면 무조건 스킵). `update_cache_background()`도
+`_compact=1`이면 무조건 스킵). `STATUSLINE_SHOW_DELTA=0`은 `~/.claude/statusline-state/` 읽기/쓰기
+자체를 건너뛴다. `update_cache_background()`도
 `STATUSLINE_SHOW_TODAY`/`WEEK`/`MONTH`가 각각 `0`이면 대응 `ccusage daily/weekly/monthly` 호출을
 개별적으로 생략한다 — 단 `ccusage blocks`는 캐시 파일 전체 쓰기를 게이트하는 역할도 겸하므로,
 Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항상 실행된다.
@@ -164,6 +174,8 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 | progress bar 문자 | `# ---- progress bar characters` | `STATUSLINE_UNICODE` 여부로 `▰▱` 또는 `=-` 선택 |
 | compact mode 감지 | `# ---- compact mode detection` | `$COLUMNS`/`STATUSLINE_COMPACT`/`STATUSLINE_COMPACT_WIDTH`로 `is_compact_mode()` 판정, `_compact` 변수에 저장 |
 | 헬퍼 함수 | `# ---- time helpers`, `# ---- pure bash progress bar`, `# ---- pure bash format_tokens` | `to_epoch()`, `progress_bar()`, `format_tokens()`, `get_mem_usage()` 등 순수 bash |
+| 디렉터리 표시 헬퍼 | `# ---- directory display (Line 1)` | `_home_tilde()`(앞부분 `$HOME`만 `~`로), `_abbrev_path()`(단계적 fish 축약, project_dir 세그먼트 보존), `_file_url()`(OSC 8용 바이트 단위 percent-encoding — bash 3.2가 0x80 이상 바이트를 음수로 돌려주는 것을 보정). 모두 REPLY 반환, 0포크 |
+| 변화량 헬퍼 | `# ---- last-change delta helpers` | `_money_to_e4()`: 달러를 1/10000 단위 정수로 바꿔 차이 계산을 정수 연산으로 유지 |
 | 세션 기동 옵션 | `# ---- session invocation (CLI argv)` | `_sc_sanitize()`/`_format_session_cmd()`(순수 bash 화이트리스트, REPLY 반환)와 `_gather_session_argv()`(상위 3단계까지 `claude` 프로세스 argv 탐색, Linux `/proc` 0포크 · macOS `ps` 1포크) |
 | 캐싱 레이어 | `# ---- cache helpers for ccusage data` | ccusage 결과 캐시, 4개 명령 병렬 실행, atomic write + lock |
 | 입력 파싱 | `# ---- parse input with single jq call` | 단일 jq 호출, Unit Separator(0x1f) 구분자. `rate_limits`도 이 한 번의 jq 호출에서 함께 추출(전용 서브프로세스 추가 없음) |
@@ -172,6 +184,8 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 | ccusage 통합 | `# ---- ccusage integration` | 일/주/월 통계, 세션 시간, 캐시 히트율 |
 | 세션 기동 옵션 수집 | `# ---- session invocation` (렌더 직전, `# ---- memory usage` 다음) | `_compact=0` + `STATUSLINE_SHOW_SESSION_CMD!=0`일 때만 `_gather_session_argv` → `_format_session_cmd` 실행해 `$_session_cmd` 설정 |
 | PR/MR | `# ---- pull request / merge request` | stdin `pr`로 `!N`/`#N` 세그먼트 조립, `_link()`(OSC 8, URL 허용 문자만)로 링크. `git-mr`이 PATH에 있고 기록이 같은 PR/MR이면 파이프라인 표시 추가 |
+| 직전 질문 변화량 | `# ---- last-change deltas` | 세션별 상태 파일을 `read`로 읽어 검증(source 금지), 기준값은 **이전 `prompt_id`의 마지막 값**(질문 제출은 재실행 트리거가 아니라서 새 prompt_id의 첫 렌더에는 이미 첫 단계가 반영돼 있음). 값이 바뀔 때만 다시 씀. 새 세션 파일을 만들 때만 7일 지난 파일을 백그라운드 `find`로 정리 |
+| 디렉터리 표시 조립 | `# ---- directory display` (렌더 직전) | compact면 basename, 아니면 `_abbrev_path`. `STATUSLINE_PATH_LINK`면 **원본 경로**(`current_dir_raw`)로 OSC 8 링크 |
 | 렌더링 | `# ---- render statusline` | `$_compact` 값으로 축약/전체 레이아웃 분기 후 3줄 출력 조립 |
 
 ### 파일 역할
@@ -181,7 +195,7 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 - **shell/git-prompt.sh**: bash/zsh 프롬프트용 선택 스니펫. git의 `__git_ps1` + `git-mr --segment=bash|zsh`. 설치기가 건드리지 않으며 README 안내대로 사용자가 직접 source
 - **configure.sh**: `statusline.sh`와 나란히 설치되는 독립 CLI/TUI. `~/.claude/statusline.conf`를 읽고 쓴다 (`list`/`get`/`set`/`unset`/`reset`/`path`/`preview` 서브커맨드, 인자 없이 실행하면 대화형 메뉴). 외부 의존성 없는 순수 bash
 - **install.sh**: 원라이너 설치 (`curl | bash`). 의존성 확인 → GitHub에서 statusline.sh + configure.sh 다운로드 → settings.json의 `statusLine` 객체(`type`/`command`) 설정. `padding`/`refreshInterval` 등 기존 `statusLine` 필드는 유지하고, 1.11.1 이전 설치기가 쓰던 소문자 `statusline` 키는 지운다. 기존 settings.json이 있으면 `.backup` 생성. 기존 `~/.claude/statusline.sh`의 2번째 줄이 `# claude-statusline - `로 시작하지 않으면(사용자 스크립트) `statusline.sh.backup-<timestamp>`로 보존한 뒤 교체
-- **uninstall.sh**: `~/.claude/statusline.sh`, `~/.claude/configure.sh`, `~/.claude/stats-cache.json`, `~/.claude/rate-limits-cache.json`, `~/.claude/statusline.conf` 삭제, settings.json에서 이 스크립트를 가리키는 `statusLine`과 소문자 `statusline` 키 제거. `statusline.sh`가 claude-statusline 것이 아니면 파일과 `statusLine` 둘 다 남긴다
+- **uninstall.sh**: `~/.claude/statusline.sh`, `~/.claude/configure.sh`, `~/.claude/stats-cache.json`, `~/.claude/rate-limits-cache.json`, `~/.claude/statusline.conf`, `~/.claude/statusline-state/` 삭제, settings.json에서 이 스크립트를 가리키는 `statusLine`과 소문자 `statusline` 키 제거. `statusline.sh`가 claude-statusline 것이 아니면 파일과 `statusLine` 둘 다 남긴다
 - **scripts/postinstall.sh**: npm `postinstall` 훅. `npm install`로 패키지 설치 시 install.sh와 동일한 역할 수행 (statusline.sh + configure.sh 복사 + settings.json 등록)
 - **scripts/preuninstall.sh**: npm `preuninstall` 훅. `npm uninstall`로 패키지 제거 시 uninstall.sh와 동일한 역할 수행
 
@@ -218,11 +232,13 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 - `STATUSLINE_HIDE_COST=1` 환경변수로 세션 비용(Line 2)과 Line 3 전체 숨김
 - `STATUSLINE_COMPACT=1`/`=0` 환경변수로 축약 레이아웃 강제 on/off (미설정 시 `$COLUMNS` 자동 감지)
 - `STATUSLINE_COMPACT_WIDTH=<cols>` 환경변수로 자동 축약 전환 기준 폭 오버라이드 (기본값 80)
-- `STATUSLINE_SHOW_*=1/0` 14개 환경변수(GIT/GIT_STATUS/GIT_DETAIL/PR/CC_VERSION/OUTPUT_STYLE/MEM/SESSION_CMD/SESSION/CACHE/SPEED/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
+- `STATUSLINE_SHOW_*=1/0` 15개 환경변수(GIT/GIT_STATUS/GIT_DETAIL/PR/CC_VERSION/OUTPUT_STYLE/MEM/SESSION_CMD/SESSION/CACHE/SPEED/DELTA/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
 - `STATUSLINE_SESSION_CMD=<cmd>` 환경변수로 부모 프로세스 argv 자동 탐색을 건너뛰고 기동 명령어를 직접 지정 (래퍼/멀티플렉서가 프로세스 체인을 3단계 넘게 늘려 자동 탐색이 실패하는 환경의 탈출구 겸, 골든 테스트의 플랫폼 독립 seam — 원문 렌더링이 아니라 자동 탐색과 동일한 화이트리스트를 통과한다)
 - 위 모든 env var는 `~/.claude/statusline.conf`(`configure.sh`가 관리)로도 설정 가능하며, 이미 설정된 env var가 항상 config 파일 값보다 우선함
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)
-- Git 브랜치명은 dirty(`*`)/ahead-behind(`↑N↓N`) 표시를 포함하며, upstream 미설정 시 ahead/behind는 조용히 생략됨 (graceful degradation과 동일한 원칙). detached HEAD는 짧은 커밋 해시. `STATUSLINE_SHOW_GIT_DETAIL=1`이면 `*` 대신 `+staged ~modified ?untracked !conflict $stash`와 `REBASE`/`MERGE` 등 진행 중인 작업을 붙인다 (compact 모드에서는 무시하고 `*` 유지)
+- Git 세그먼트는 전체 레이아웃에서 브랜치 뒤 괄호 안에 **단어로 설명된 개수**를 쓴다: `main (3 uncommitted, ↑2 to push, ↓1 to pull)`, `STATUSLINE_SHOW_GIT_DETAIL=1`이면 `main (rebasing, 1 conflicted, 2 staged, 1 modified, 3 untracked, 1 stashed, ↑1 to push)`. 순서는 진행 중인 작업 → 충돌 → 작업 트리 개수 → stash → push/pull(급한 것부터). detached HEAD는 `detached <짧은 해시>`. compact 모드에서만 짧은 기호(`main* ↑2↓1`)를 쓴다 — `+2 ~1 ?3 $1 REBASE` 같은 기호만으로는 의미를 알 수 없다는 사용자 피드백 때문이므로 전체 레이아웃을 기호로 되돌리지 말 것. upstream 미설정 시 push/pull은 조용히 생략됨 (graceful degradation과 동일한 원칙)
+- `STATUSLINE_PATH_MAX=<chars>`(기본 32, `0`이면 축약 안 함)로 Line 1 경로 축약 기준 길이, `STATUSLINE_PATH_LINK=1`로 경로를 OSC 8 `file://` 링크로 감싸 클릭 시 Finder/탐색기로 열기(opt-in — tmux/SSH가 시퀀스를 지우거나 문서가 경고하는 이스케이프 깨짐 위험 때문, `STATUSLINE_HYPERLINKS=0`이면 함께 꺼짐). 표시용 `current_dir`(`~` 치환·축약)과 원본 `current_dir_raw`는 분리되어 있으며 JSONL fallback 경로 계산과 링크는 반드시 원본을 쓸 것
+- 지속 애니메이션(스피너, 깜빡임)은 넣지 않는다: 프레임 하나가 스크립트 한 번 실행이고 최소 간격이 1초(`refreshInterval`)이며 새 트리거가 오면 실행이 취소되므로 끊겨 보이고, 문서도 이스케이프가 많은 여러 줄 출력이 깨질 수 있다고 경고한다. 변화를 보여주는 수단은 직전 질문 변화량(`STATUSLINE_SHOW_DELTA`)이다
 - context_window stdin 필드를 우선 사용하고, 없을 때만 JSONL fallback
 - Line 1의 세션 기동 옵션(`⌘ ...`)은 **기동 시점 argv**다. 따라서 `--permission-mode`는 세션이 시작될 때의 값이며 세션 중 Shift+Tab 변경을 따라가지 않는다 — 이건 버그가 아니라 데이터 출처의 성질이다. 실시간 권한 모드는 stdin에 없고 transcript JSONL의 `{"type":"permission-mode"}` 레코드에는 타임스탬프가 없어 "마지막 값"을 신뢰할 수 없으므로 tail 스캔으로 "고치지" 말 것. 새 플래그를 화이트리스트에 추가할 때는 값이 경로/프롬프트/JSON이면 값은 버리고 존재만 렌더링하고(`+mcp`/`+sysprompt` 패턴), 값을 보여줄 플래그는 반드시 `_sc_sanitize`를 거칠 것 — `tests/unit_session_cmd.bats`가 ANSI/개행/길이 초과 케이스를 검증한다
 

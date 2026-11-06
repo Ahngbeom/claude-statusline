@@ -121,7 +121,7 @@ setup_git_repo() {
   rm -rf "$base"
 }
 
-@test "golden: default (no SHOW_GIT_STATUS set) still shows the dirty marker" {
+@test "golden: default (no SHOW_GIT_STATUS set) still shows the uncommitted count" {
   base="$(mktemp -d)"
   setup_git_repo "$base"
   echo "uncommitted change" >>"$base/work/file.txt"
@@ -129,7 +129,7 @@ setup_git_repo() {
   run run_statusline_in "$base/work" "$JSON"
   [ "$status" -eq 0 ]
   line1="$(sed -n '1p' <<<"$output")"
-  [[ "$line1" == *"feature-x*"* ]]
+  [[ "$line1" == *"feature-x (1 uncommitted)"* ]]
 
   rm -rf "$base"
 }

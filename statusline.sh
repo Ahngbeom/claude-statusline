@@ -1,14 +1,16 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.12.1
+# Version: 1.13.0
 # License: MIT
 #
 # Features:
-#   Line 1: Directory + Git branch (dirty */ahead-behind ↑↓, opt-in counts) + PR/MR !N/#N
+#   Line 1: Directory (shortened when long) + Git branch (uncommitted / to push / to pull,
+#           opt-in staged/modified/... breakdown) + PR/MR !N/#N
 #           (clickable, pipeline mark via bin/git-mr) │ Model, CLI version, Output style,
 #           session launch flags (⌘ -c / plan / bypass ...)
-#   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed
+#   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed, plus what
+#           the last prompt added (+4.2K, +$0.03)
 #   Line 3: Daily │ Weekly │ Monthly usage and costs
 #   Compact mode: auto-shrinks the above on narrow terminals (see STATUSLINE_COMPACT below)
 #   Per-user customization: sibling configure.sh CLI/TUI persists settings to
@@ -28,11 +30,13 @@
 #   STATUSLINE_COMPACT_WIDTH=<n> Compact-mode auto-trigger threshold (default 80)
 #   STATUSLINE_CONFIG_FILE=<path> Override the ~/.claude/statusline.conf path
 #   STATUSLINE_SHOW_GIT=1/0          Line 1 git branch segment (default 1)
-#   STATUSLINE_SHOW_GIT_STATUS=1/0   Dirty(*)/ahead-behind(↑↓) markers only (default 1)
-#   STATUSLINE_SHOW_GIT_DETAIL=1/0   +staged ~modified ?untracked !conflict $stash and
-#                                    REBASE/MERGE/... instead of * (default 0, full layout only)
+#   STATUSLINE_SHOW_GIT_STATUS=1/0   "(3 uncommitted, ↑2 to push)" after the branch (default 1)
+#   STATUSLINE_SHOW_GIT_DETAIL=1/0   Split "uncommitted" into staged/modified/untracked/
+#                                    conflicted, plus stashes and rebasing/merging/...
+#                                    (default 0, full layout only)
 #   STATUSLINE_SHOW_PR=1/0           Line 1 open PR/MR from stdin .pr (default 1)
-#   STATUSLINE_HYPERLINKS=1/0        OSC 8 links on the PR/MR number and pipeline mark (default 1)
+#   STATUSLINE_HYPERLINKS=1/0        OSC 8 links on the PR/MR number, pipeline mark and
+#                                    (with STATUSLINE_PATH_LINK=1) the directory (default 1)
 #   STATUSLINE_SHOW_CC_VERSION=1/0   Line 1 CLI version (default 1)
 #   STATUSLINE_SHOW_OUTPUT_STYLE=1/0 Line 1 output style (default 1)
 #   STATUSLINE_SHOW_MEM=1/0          Line 1 memory indicator (default 1)
@@ -43,12 +47,15 @@
 #   STATUSLINE_SHOW_SESSION=1/0      Line 2 Session segment (default 1)
 #   STATUSLINE_SHOW_CACHE=1/0        Line 2 cache hit rate (default 1)
 #   STATUSLINE_SHOW_SPEED=1/0        Line 2 tokens/min (default 1)
+#   STATUSLINE_SHOW_DELTA=1/0        Line 2 last-prompt change (default 1)
+#   STATUSLINE_PATH_MAX=<n>          Shorten the Line 1 dir beyond n chars (default 32, 0 = never)
+#   STATUSLINE_PATH_LINK=1           Make the Line 1 dir an OSC 8 file:// link (opt-in)
 #   STATUSLINE_SHOW_TODAY=1/0        Line 3 Today (default 1)
 #   STATUSLINE_SHOW_WEEK=1/0         Line 3 Week (default 1)
 #   STATUSLINE_SHOW_MONTH=1/0        Line 3 Month (default 1)
 #   STATUSLINE_SEP_CHAR=<str>        Separator character, all lines (default │)
 #   STATUSLINE_COLOR_DIR/_MODEL/_GIT/_CC_VERSION/_OUTPUT_STYLE/_SEP/_CACHE/
-#     _TODAY/_WEEK/_MONTH=<0-255>    Per-element 256-color code override
+#     _TODAY/_WEEK/_MONTH/_DELTA=<0-255> Per-element 256-color code override
 #   STATUSLINE_COLOR_CTX_OK/_WARN/_CRIT=<0-255>       Context bar 3-tier colors
 #   STATUSLINE_COLOR_SESSION_OK/_WARN/_CRIT=<0-255>   Session 3-tier colors
 #   STATUSLINE_COLOR_MEM_OK/_WARN/_CRIT=<0-255>       Mem indicator 3-tier colors
@@ -397,6 +404,27 @@
 #     far) shifted every later field: no session time, wrong cache rate,
 #     and the cache-read count shown as Speed.
 
+# Changes (v1.13.0):
+#   - Long Line 1 directories are shortened fish-style (STATUSLINE_PATH_MAX,
+#     default 32): folder names collapse to their first letter from the left
+#     until it fits, keeping the current folder and workspace.project_dir
+#     whole; …/ replaces the prefix when that still overflows.
+#   - STATUSLINE_PATH_LINK=1 wraps the directory in an OSC 8 file:// link to
+#     the full path, so Cmd/Ctrl+click opens it in Finder/Explorer.
+#     STATUSLINE_HYPERLINKS=0 still turns every link off.
+#   - The git segment spells out its markers: "main (3 uncommitted, ↑2 to
+#     push, ↓1 to pull)"; with STATUSLINE_SHOW_GIT_DETAIL=1 "main (rebasing,
+#     1 conflicted, 2 staged, 1 modified, 3 untracked, 1 stashed, ...)"
+#     instead of "main ↑1 +2 ~1 ?3 !1 $1 REBASE". A detached HEAD reads
+#     "detached <sha>". Compact mode keeps the short */↑N↓N forms.
+#   - Line 2 shows what the last prompt added to context and session cost
+#     (+4.2K, +$0.03), summed over every step of that prompt via prompt_id
+#     (STATUSLINE_SHOW_DELTA, STATUSLINE_COLOR_DELTA). Per-session state lives
+#     in ~/.claude/statusline-state/.
+#   - Fixed: $HOME -> ~ replaced matches anywhere in the path (and sibling
+#     dirs like /Users/meow for HOME=/Users/me); the JSONL fallback rebuilt
+#     the session path from that display string, breaking dirs containing ~.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -419,7 +447,8 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
       NO_COLOR|STATUSLINE_UNICODE|STATUSLINE_HIDE_COST|STATUSLINE_COMPACT|STATUSLINE_COMPACT_WIDTH|STATUSLINE_MAX_CONTEXT|\
       STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_GIT_DETAIL|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
       STATUSLINE_SHOW_SESSION_CMD|STATUSLINE_SESSION_CMD|STATUSLINE_SHOW_PR|STATUSLINE_HYPERLINKS|\
-      STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH)
+      STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH|\
+      STATUSLINE_PATH_MAX|STATUSLINE_PATH_LINK|STATUSLINE_SHOW_DELTA)
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
@@ -487,6 +516,7 @@ if [ -z "$NO_COLOR" ]; then
   _resolve_color "$STATUSLINE_COLOR_TODAY" 153;                _today=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_WEEK" 183;                 _week=$'\033[38;5;'"${REPLY}m"
   _resolve_color "$STATUSLINE_COLOR_MONTH" 216;                _month=$'\033[38;5;'"${REPLY}m"
+  _resolve_color "$STATUSLINE_COLOR_DELTA" 245;                _delta=$'\033[38;5;'"${REPLY}m"
   _ctx=$'\033[1;37m'          # default white (context - updated dynamically)
   _rst=$'\033[0m'
   # 3-tier color sets: the dynamic *_color()/inline blocks below pick one of
@@ -506,7 +536,7 @@ if [ -z "$NO_COLOR" ]; then
   _resolve_color "$STATUSLINE_COLOR_PR_DRAFT" 245;             _pr_draft=$'\033[38;5;'"${REPLY}m"
 else
   _dir="" _model="" _ccver="" _style="" _git="" _cmd=""
-  _cache="" _today="" _week="" _month=""
+  _cache="" _today="" _week="" _month="" _delta=""
   _ctx="" _sep="" _rst=""
   _ctx_ok="" _ctx_warn="" _ctx_crit=""
   _session_ok="" _session_warn="" _session_crit=""
@@ -748,6 +778,99 @@ get_mem_usage() {
   fi
   echo ""
 }
+
+# ---- directory display (Line 1) ----
+_home_tilde() {
+  REPLY="$1"
+  [ -n "$HOME" ] && [ "$HOME" != "/" ] || return 0
+  case "$1" in
+    "$HOME") REPLY="~" ;;
+    "$HOME"/*) REPLY="~${1#"$HOME"}" ;;
+  esac
+}
+
+_abbrev_path() {
+  local path="$1" max="$2" anchor="$3"
+  REPLY="$path"
+  [[ "$max" =~ ^[0-9]+$ ]] && [ "$max" -gt 0 ] || return 0
+  [ "${#path}" -le "$max" ] && return 0
+
+  local IFS=/ i seg anchor_idx=-1 tail cand
+  local -a segs orig anchor_segs
+  read -r -a segs <<< "$path"
+  orig=("${segs[@]}")
+  local last=$(( ${#segs[@]} - 1 ))
+  if [ -n "$anchor" ]; then
+    case "$path" in
+      "$anchor"|"$anchor"/*)
+        read -r -a anchor_segs <<< "$anchor"
+        anchor_idx=$(( ${#anchor_segs[@]} - 1 )) ;;
+    esac
+  fi
+  # A non-UTF-8 locale would slice the first BYTE of a multibyte name and
+  # print broken UTF-8, so such segments are left whole there.
+  local mb_probe=$'\xc3\xa9' mb_ok=0
+  [ "${#mb_probe}" -eq 1 ] && mb_ok=1
+
+  for (( i = 0; i < last; i++ )); do
+    [ "$i" -eq "$anchor_idx" ] && continue
+    seg="${segs[i]}"
+    [ "$mb_ok" -eq 0 ] && [[ "${seg:0:1}" != [\ -~] ]] && continue
+    case "$seg" in
+      .?*) seg="${seg:0:2}" ;;
+      *)   seg="${seg:0:1}" ;;
+    esac
+    [ "$seg" = "${segs[i]}" ] && continue
+    segs[i]="$seg"
+    REPLY="${segs[*]}"
+    [ "${#REPLY}" -le "$max" ] && return 0
+  done
+
+  if [ "$anchor_idx" -gt 0 ]; then
+    REPLY="…/${segs[*]:anchor_idx}"
+    [ "${#REPLY}" -le "$max" ] && return 0
+  fi
+  tail="${orig[last]}"
+  for (( i = last - 1; i >= 0; i-- )); do
+    cand="${orig[i]}/$tail"
+    [ $(( ${#cand} + 2 )) -le "$max" ] || break
+    tail="$cand"
+  done
+  REPLY="…/$tail"
+}
+
+# Byte-wise encoding needs LC_ALL=C; restoring it matters because later
+# ${#var} widths depend on the caller's locale.
+_file_url() {
+  REPLY=""
+  case "$1" in /*) ;; *) return 0 ;; esac
+  local s="$1" out="" c n i had_lc="${LC_ALL+x}" saved_lc="${LC_ALL-}"
+  LC_ALL=C
+  for (( i = 0; i < ${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9/._~-]) out+="$c" ;;
+      *)
+        printf -v n '%d' "'$c"
+        # bash 3.2 returns bytes >= 0x80 as negative numbers
+        if [ "$n" -lt 0 ]; then n=$(( n + 256 )); fi
+        printf -v c '%%%02X' "$n"
+        out+="$c" ;;
+    esac
+  done
+  if [ -n "$had_lc" ]; then LC_ALL="$saved_lc"; else unset LC_ALL; fi
+  REPLY="file://${HOSTNAME}${out}"
+}
+
+# ---- last-change delta helpers ----
+# Money as an integer count of 1/10000 dollars, so deltas stay in pure
+# integer arithmetic (same locale reasoning as round_money()).
+_money_to_e4() {
+  local whole="${1%%.*}" frac="0000"
+  [[ "$1" == *.* ]] && frac="${1#*.}0000"
+  REPLY=$(( 10#$whole * 10000 + 10#${frac:0:4} ))
+}
+
 
 # ---- session invocation (CLI argv) ----
 # Which flags this session was started with (`claude -c`, `--permission-mode
@@ -1020,7 +1143,7 @@ if command -v jq >/dev/null 2>&1; then
   IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style \
     ctx_input_tokens ctx_window_size \
     session_cost_usd transcript_path rate_limits_json rl5h_pct rl5h_reset \
-    pr_number pr_url pr_state pr_kind < <(
+    pr_number pr_url pr_state pr_kind ws_project_dir prompt_id < <(
     jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
@@ -1037,13 +1160,16 @@ if command -v jq >/dev/null 2>&1; then
       (.pr.number // ""),
       (.pr.url // ""),
       (.pr.review_state // ""),
-      (.pr.kind // "")
+      (.pr.kind // ""),
+      (.workspace.project_dir // ""),
+      (.prompt_id // "")
     ] | join("\u001f")' 2>/dev/null <<< "$input"
   )
-  current_dir="${current_dir//$HOME/~}"
 else
   _has_jq=0
   current_dir="unknown"
+  ws_project_dir=""
+  prompt_id=""
   model_name="Claude"
   session_id=""
   cc_version=""
@@ -1053,6 +1179,10 @@ else
   rl5h_reset=""
   pr_number=""
 fi
+current_dir_raw="$current_dir"
+_home_tilde "$current_dir"; current_dir="$REPLY"
+_project_dir_disp=""
+if [ -n "$ws_project_dir" ]; then _home_tilde "$ws_project_dir"; _project_dir_disp="$REPLY"; fi
 
 # ---- rate limits cache (side-channel output for external consumers, e.g.
 # cc-menutor's reset anchor auto-sync) ----
@@ -1080,7 +1210,7 @@ fi
 # A stuck index.lock / slow filesystem hits the timeout and shows no branch.
 # $1 = "1" also reports REBASE/MERGE/... state, at the cost of one more fork.
 _gather_git_info() {
-  local st line oid="" head="" ab="" a="" b="" stash=0 staged=0 modified=0 untracked=0 conflict=0 dirty="" op="" gd
+  local st line oid="" head="" ab="" a="" b="" stash=0 staged=0 modified=0 untracked=0 conflict=0 files=0 dirty="" detached="" op="" gd
   st=$(git --no-optional-locks status --porcelain=v2 --branch --show-stash 2>/dev/null) || return
   while IFS= read -r line; do
     case $line in
@@ -1090,15 +1220,15 @@ _gather_git_info() {
       '# stash '*)       stash=${line#'# stash '} ;;
       '#'*|'') ;;
       [12]' '*)
-        dirty=1
+        dirty=1; files=$((files + 1))
         [ "${line:2:1}" != . ] && staged=$((staged + 1))
         [ "${line:3:1}" != . ] && modified=$((modified + 1))
         ;;
-      'u '*) dirty=1; conflict=$((conflict + 1)) ;;
-      '? '*) dirty=1; untracked=$((untracked + 1)) ;;
+      'u '*) dirty=1; files=$((files + 1)); conflict=$((conflict + 1)) ;;
+      '? '*) dirty=1; files=$((files + 1)); untracked=$((untracked + 1)) ;;
     esac
   done <<<"$st"
-  [ "$head" = "(detached)" ] && head=${oid:0:7}
+  [ "$head" = "(detached)" ] && head=${oid:0:7} && detached=1
   [ -n "$ab" ] && read -r a b <<<"$ab"
   if [ "$1" = 1 ] && gd=$(git rev-parse --git-dir 2>/dev/null); then
     if [ -d "$gd/rebase-merge" ] || [ -d "$gd/rebase-apply" ]; then op=REBASE
@@ -1108,7 +1238,7 @@ _gather_git_info() {
     elif [ -f "$gd/BISECT_LOG" ]; then op=BISECT
     fi
   fi
-  printf '%s\x1f' "$head" "$dirty" "${b#-}" "${a#+}" "$staged" "$modified" "$untracked" "$conflict" "$stash" "$op"
+  printf '%s\x1f' "$head" "$dirty" "${b#-}" "${a#+}" "$staged" "$modified" "$untracked" "$conflict" "$stash" "$op" "$files" "$detached"
 }
 # Real `timeout`/`gtimeout` exec their target directly, so a plain shell
 # function name isn't runnable under it — route through `bash -c` with the
@@ -1117,28 +1247,48 @@ _gather_git_info() {
 export -f _gather_git_info
 
 git_branch=""
+git_branch_compact=""
 if [ "${STATUSLINE_SHOW_GIT:-1}" != "0" ]; then
   _git_detail=0
   [ "${STATUSLINE_SHOW_GIT_STATUS:-1}" != "0" ] && [ "${STATUSLINE_SHOW_GIT_DETAIL:-0}" = "1" ] && [ "$_compact" -eq 0 ] && _git_detail=1
   # shellcheck disable=SC2016 # $1 belongs to the bash -c script
-  IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead _gstaged _gmodified _guntracked _gconflict _gstash _gop \
+  IFS=$'\x1f' read -r _gb _gdirty git_behind git_ahead _gstaged _gmodified _guntracked _gconflict _gstash _gop _gfiles _gdetached \
     < <(with_timeout 2 bash -c '_gather_git_info "$1"' _ "$_git_detail")
   if [ -n "$_gb" ]; then
+    [ -n "$_gdetached" ] && _gb="detached $_gb"
     git_branch="$_gb"
+    git_branch_compact="$_gb"
     if [ "${STATUSLINE_SHOW_GIT_STATUS:-1}" != "0" ]; then
-      [ -n "$_gdirty" ] && [ "$_git_detail" -eq 0 ] && git_branch="${git_branch}*"
-      git_ahead_behind=""
-      [[ "$git_ahead" =~ ^[0-9]+$ ]] && [ "$git_ahead" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↑${git_ahead}"
-      [[ "$git_behind" =~ ^[0-9]+$ ]] && [ "$git_behind" -gt 0 ] && git_ahead_behind="${git_ahead_behind}↓${git_behind}"
-      [ -n "$git_ahead_behind" ] && git_branch="${git_branch} ${git_ahead_behind}"
+      _gparts=()
       if [ "$_git_detail" -eq 1 ]; then
-        [[ "$_gstaged" =~ ^[1-9][0-9]*$ ]]    && git_branch="${git_branch} +${_gstaged}"
-        [[ "$_gmodified" =~ ^[1-9][0-9]*$ ]]  && git_branch="${git_branch} ~${_gmodified}"
-        [[ "$_guntracked" =~ ^[1-9][0-9]*$ ]] && git_branch="${git_branch} ?${_guntracked}"
-        [[ "$_gconflict" =~ ^[1-9][0-9]*$ ]]  && git_branch="${git_branch} !${_gconflict}"
-        [[ "$_gstash" =~ ^[1-9][0-9]*$ ]]     && git_branch="${git_branch} \$${_gstash}"
-        [ -n "$_gop" ] && git_branch="${git_branch} ${_gop}"
+        case "$_gop" in
+          REBASE) _gparts+=("rebasing") ;;
+          MERGE) _gparts+=("merging") ;;
+          CHERRY-PICK) _gparts+=("cherry-picking") ;;
+          REVERT) _gparts+=("reverting") ;;
+          BISECT) _gparts+=("bisecting") ;;
+        esac
+        [[ "$_gconflict" =~ ^[1-9][0-9]*$ ]]  && _gparts+=("${_gconflict} conflicted")
+        [[ "$_gstaged" =~ ^[1-9][0-9]*$ ]]    && _gparts+=("${_gstaged} staged")
+        [[ "$_gmodified" =~ ^[1-9][0-9]*$ ]]  && _gparts+=("${_gmodified} modified")
+        [[ "$_guntracked" =~ ^[1-9][0-9]*$ ]] && _gparts+=("${_guntracked} untracked")
+        [[ "$_gstash" =~ ^[1-9][0-9]*$ ]]     && _gparts+=("${_gstash} stashed")
+      else
+        [[ "$_gfiles" =~ ^[1-9][0-9]*$ ]] && _gparts+=("${_gfiles} uncommitted")
       fi
+      [[ "$git_ahead" =~ ^[1-9][0-9]*$ ]]  && _gparts+=("↑${git_ahead} to push")
+      [[ "$git_behind" =~ ^[1-9][0-9]*$ ]] && _gparts+=("↓${git_behind} to pull")
+      if [ "${#_gparts[@]}" -gt 0 ]; then
+        _gjoined="${_gparts[0]}"
+        for _gp in "${_gparts[@]:1}"; do _gjoined="${_gjoined}, ${_gp}"; done
+        git_branch="${git_branch} (${_gjoined})"
+      fi
+
+      [ -n "$_gdirty" ] && git_branch_compact="${git_branch_compact}*"
+      git_ahead_behind=""
+      [[ "$git_ahead" =~ ^[1-9][0-9]*$ ]]  && git_ahead_behind="↑${git_ahead}"
+      [[ "$git_behind" =~ ^[1-9][0-9]*$ ]] && git_ahead_behind="${git_ahead_behind}↓${git_behind}"
+      [ -n "$git_ahead_behind" ] && git_branch_compact="${git_branch_compact} ${git_ahead_behind}"
     fi
   fi
 fi
@@ -1264,7 +1414,7 @@ elif [ -n "$session_id" ] && [ "$_has_jq" -eq 1 ]; then
   if [ -n "$transcript_path" ] && [ -f "$transcript_path" ]; then
     session_file="$transcript_path"
   else
-    project_dir="${current_dir//\~/$HOME}"
+    project_dir="$current_dir_raw"
     project_dir="${project_dir//\//-}"
     project_dir="${project_dir#-}"
     session_file="$HOME/.claude/projects/-${project_dir}/${session_id}.jsonl"
@@ -1414,6 +1564,89 @@ if [ -z "$NO_COLOR" ]; then
   fi
 fi
 
+# ---- last-change deltas (Line 2 "+4.2K" / "+$0.05") ----
+# Baseline is the previous prompt's LAST value: submitting a prompt is not a
+# re-run trigger, so a new prompt_id's first render already includes step 1.
+# State line: "v2 <prompt> <ctx> <ctx_base> <cost_e4> <cost_base_e4>", "-" = unknown.
+_ctx_delta="-" _cost_delta_e4="-"
+if [ "${STATUSLINE_SHOW_DELTA:-1}" != "0" ] && [[ "$session_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  _state_dir="$HOME/.claude/statusline-state"
+  _state_file="$_state_dir/$session_id"
+  _cur_ctx="-"
+  [[ "$context_used_tokens" =~ ^[0-9]+$ ]] && _cur_ctx="$context_used_tokens"
+  _cur_cost="-"
+  if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    _money_to_e4 "$session_cost_usd"; _cur_cost="$REPLY"
+  fi
+  _cur_prompt="-"
+  [[ "$prompt_id" =~ ^[A-Za-z0-9-]+$ ]] && _cur_prompt="$prompt_id"
+
+  _old_state="v2 - - - - -"
+  if [ -f "$_state_file" ]; then
+    read -r _sv _sp _sa _sb _sc _sd < "$_state_file" 2>/dev/null
+    if [ "$_sv" = "v2" ] && [[ "$_sp" =~ ^(-|[A-Za-z0-9-]+)$ ]] \
+       && [[ "$_sa" =~ ^(-|[0-9]+)$ ]] && [[ "$_sb" =~ ^(-|[0-9]+)$ ]] \
+       && [[ "$_sc" =~ ^(-|[0-9]+)$ ]] && [[ "$_sd" =~ ^(-|[0-9]+)$ ]]; then
+      _old_state="v2 $_sp $_sa $_sb $_sc $_sd"
+    fi
+  fi
+  read -r _ _sp _sa _sb _sc _sd <<< "$_old_state"
+
+  _new_base=0
+  if [ "$_cur_prompt" != "-" ]; then
+    [ "$_cur_prompt" != "$_sp" ] && _new_base=1
+  elif { [ "$_cur_ctx" != "-" ] && [ "$_cur_ctx" != "$_sa" ]; } \
+       || { [ "$_cur_cost" != "-" ] && [ "$_cur_cost" != "$_sc" ]; }; then
+    _new_base=1
+  fi
+  if [ "$_new_base" -eq 1 ]; then _sb="$_sa"; _sd="$_sc"; fi
+  [ "$_cur_ctx" != "-" ] && _sa="$_cur_ctx"
+  [ "$_cur_cost" != "-" ] && _sc="$_cur_cost"
+  [ "$_sa" != "-" ] && [ "$_sb" != "-" ] && _ctx_delta=$(( _sa - _sb ))
+  [ "$_sc" != "-" ] && [ "$_sd" != "-" ] && _cost_delta_e4=$(( _sc - _sd ))
+
+  _new_state="v2 $_cur_prompt $_sa $_sb $_sc $_sd"
+  if [ "$_new_state" != "$_old_state" ]; then
+    [ -d "$_state_dir" ] || mkdir -p "$_state_dir" 2>/dev/null
+    if [ ! -f "$_state_file" ]; then
+      ( find "$_state_dir" -maxdepth 1 -type f -mtime +7 -delete ) >/dev/null 2>&1 &
+    fi
+    printf '%s\n' "$_new_state" > "$_state_file" 2>/dev/null
+  fi
+fi
+
+_ctx_delta_txt=""
+if [[ "$_ctx_delta" =~ ^-?[0-9]+$ ]] && [ "$_ctx_delta" -ne 0 ]; then
+  if [ "$_ctx_delta" -gt 0 ]; then
+    _ctx_delta_txt="+$(format_tokens "$_ctx_delta")"
+  else
+    _ctx_delta_txt="-$(format_tokens $(( -_ctx_delta )))"
+  fi
+fi
+_cost_delta_txt=""
+if [[ "$_cost_delta_e4" =~ ^[0-9]+$ ]]; then
+  _cents=$(( (_cost_delta_e4 + 50) / 100 ))
+  if [ "$_cents" -gt 0 ]; then
+    printf -v _cost_delta_txt '+$%d.%02d' $(( _cents / 100 )) $(( _cents % 100 ))
+  fi
+fi
+
+# ---- directory display ----
+if [ "$_compact" -eq 1 ]; then
+  _dir_text="${current_dir##*/}"
+else
+  _abbrev_path "$current_dir" "${STATUSLINE_PATH_MAX:-32}" "$_project_dir_disp"
+  _dir_text="$REPLY"
+fi
+_dir_link_open="" _dir_link_close=""
+if [ -n "$STATUSLINE_PATH_LINK" ] && [ "${STATUSLINE_HYPERLINKS:-1}" != "0" ]; then
+  _file_url "$current_dir_raw"
+  if [ -n "$REPLY" ]; then
+    _dir_link_open=$'\033]8;;'"$REPLY"$'\a'
+    _dir_link_close=$'\033]8;;\a'
+  fi
+fi
+
 # ---- render statusline ----
 _ctx_bar_width=$(( _compact ? 8 : 20 ))
 
@@ -1424,9 +1657,9 @@ if [ "$_compact" -eq 1 ]; then
   # Line 3 collapses Session+Today/Week/Month/Cache/Speed down to
   # "Sess <cost> <time>  │  Today <cost>" -- token counts, the session bar,
   # Week/Month and cache/speed are all omitted.
-  printf '%s %s%s%s' "$_icon_dir" "$_dir" "${current_dir##*/}" "$_rst"
-  if [ -n "$git_branch" ]; then
-    printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
+  printf '%s %s%s%s%s%s' "$_icon_dir" "$_dir" "$_dir_link_open" "$_dir_text" "$_dir_link_close" "$_rst"
+  if [ -n "$git_branch_compact" ]; then
+    printf '  %s%s%s' "$_git" "$git_branch_compact" "$_rst"
   fi
   if [ -n "$pr_seg" ]; then
     printf '  %s' "$pr_seg"
@@ -1486,7 +1719,7 @@ if [ "$_compact" -eq 1 ]; then
   fi
 else
   # Line 1: 📂 dir  branch │ model  cc_ver  style
-  printf '%s %s%s%s' "$_icon_dir" "$_dir" "$current_dir" "$_rst"
+  printf '%s %s%s%s%s%s' "$_icon_dir" "$_dir" "$_dir_link_open" "$_dir_text" "$_dir_link_close" "$_rst"
   if [ -n "$git_branch" ]; then
     printf '  %s%s%s' "$_git" "$git_branch" "$_rst"
   fi
@@ -1523,6 +1756,7 @@ else
     used_formatted=$(format_tokens "$context_used_tokens")
     max_formatted=$(format_tokens "$context_max_tokens")
     ctx_part="${_icon_ctx} ${_ctx}Context ${used_formatted}/${max_formatted} ${context_bar} ${context_remaining_pct}%${_rst}"
+    [ -n "$_ctx_delta_txt" ] && ctx_part="${ctx_part} ${_delta}${_ctx_delta_txt}${_rst}"
   else
     ctx_part="${_icon_ctx} ${_ctx}Context ···${_rst}"
   fi
@@ -1536,6 +1770,7 @@ else
       if [[ "$session_cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         _sess_cost_num="\$$(round_money "$session_cost_usd")"
         _sess_cost=" $_sess_cost_num"
+        [ -n "$_cost_delta_txt" ] && _sess_cost="${_sess_cost} ${_rst}${_delta}${_cost_delta_txt}${_rst}${_session}"
       elif [[ "$cost_usd" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         _sess_cost_num="\$$(round_money "$cost_usd")"
         _sess_cost=" $_sess_cost_num"

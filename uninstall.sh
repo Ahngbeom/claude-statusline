@@ -12,6 +12,7 @@ CONFIG_FILE="$CLAUDE_DIR/statusline.conf"
 # shellcheck disable=SC2088 # literal ~ on purpose: Claude Code expands it
 STATUSLINE_CMD="~/.claude/statusline.sh"
 KEEP_STATUSLINE_SETTING=""
+STATE_DIR="$CLAUDE_DIR/statusline-state"
 
 # Colors
 GREEN='\033[0;32m'
@@ -85,6 +86,12 @@ remove_cache() {
     print_success "Removed $CONFIG_FILE"
   else
     print_warning "Config file not found"
+  fi
+
+  if [ -d "$STATE_DIR" ]; then
+    rm -f "$STATE_DIR"/*
+    rmdir "$STATE_DIR" 2>/dev/null
+    print_success "Removed $STATE_DIR"
   fi
 }
 
