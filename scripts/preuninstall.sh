@@ -12,6 +12,7 @@ CONFIG_FILE="$CLAUDE_DIR/statusline.conf"
 # shellcheck disable=SC2088 # literal ~ on purpose: Claude Code expands it
 STATUSLINE_CMD="~/.claude/statusline.sh"
 KEEP_STATUSLINE_SETTING=""
+STATE_DIR="$CLAUDE_DIR/statusline-state"
 
 # Remove statusline.sh, unless it is the user's own script
 if [ -f "$STATUSLINE_FILE" ] && ! head -n 2 "$STATUSLINE_FILE" | grep -q '^# claude-statusline - '; then
@@ -44,6 +45,12 @@ fi
 if [ -f "$CONFIG_FILE" ]; then
   rm "$CONFIG_FILE"
   echo "claude-statusline: removed $CONFIG_FILE"
+fi
+
+if [ -d "$STATE_DIR" ]; then
+  rm -f "$STATE_DIR"/*
+  rmdir "$STATE_DIR" 2>/dev/null
+  echo "claude-statusline: removed $STATE_DIR"
 fi
 
 # Remove statusline setting from settings.json
