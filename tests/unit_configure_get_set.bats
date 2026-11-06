@@ -272,3 +272,20 @@ configure_sh() {
   [[ "$output" == *"STATUSLINE_THRESHOLD_SESSION_CRIT"* ]]
   [[ "$output" == *"STATUSLINE_SEP_CHAR"* ]]
 }
+
+@test "configure: STATUSLINE_THEME defaults to 'default' and round-trips 'space'" {
+  run configure_sh get STATUSLINE_THEME
+  [ "$output" = "default" ]
+  run configure_sh set STATUSLINE_THEME space
+  [ "$status" -eq 0 ]
+  grep -q '^STATUSLINE_THEME=space$' "$STATUSLINE_CONFIG_FILE"
+  run configure_sh get STATUSLINE_THEME
+  [ "$output" = "space" ]
+}
+
+@test "configure: setting STATUSLINE_THEME to 'default' removes the line" {
+  configure_sh set STATUSLINE_THEME space
+  run configure_sh set STATUSLINE_THEME default
+  [ "$status" -eq 0 ]
+  ! grep -q '^STATUSLINE_THEME=' "$STATUSLINE_CONFIG_FILE"
+}

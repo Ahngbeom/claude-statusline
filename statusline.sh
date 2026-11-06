@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.13.1
+# Version: 1.14.0
 # License: MIT
 #
 # Features:
@@ -53,6 +53,8 @@
 #   STATUSLINE_SHOW_TODAY=1/0        Line 3 Today (default 1)
 #   STATUSLINE_SHOW_WEEK=1/0         Line 3 Week (default 1)
 #   STATUSLINE_SHOW_MONTH=1/0        Line 3 Month (default 1)
+#   STATUSLINE_THEME=<name>          Preset colors/icons/separator: default, space
+#                                    (each STATUSLINE_COLOR_*/ICON_*/SEP_CHAR still wins)
 #   STATUSLINE_SEP_CHAR=<str>        Separator character, all lines (default │)
 #   STATUSLINE_COLOR_DIR/_MODEL/_GIT/_CC_VERSION/_OUTPUT_STYLE/_SEP/_CACHE/
 #     _TODAY/_WEEK/_MONTH/_DELTA=<0-255> Per-element 256-color code override
@@ -434,6 +436,13 @@
 #     cache file ran on every prompt. `git mr --open/--url` also refuse a
 #     non-http(s) URL now.
 
+# Changes (v1.14.0):
+#   - STATUSLINE_THEME=space: a constellation preset of colors, icons
+#     (✧ ☾ ✶ ◌ ◍) and separator (⋆), matching the space theme of the
+#     shell-prompt project. A theme only fills keys left unset, so any
+#     individual STATUSLINE_COLOR_*/ICON_*/SEP_CHAR still wins. The git
+#     segment keeps its words.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -457,7 +466,7 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
       STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_GIT_DETAIL|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
       STATUSLINE_SHOW_SESSION_CMD|STATUSLINE_SESSION_CMD|STATUSLINE_SHOW_PR|STATUSLINE_HYPERLINKS|\
       STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH|\
-      STATUSLINE_PATH_MAX|STATUSLINE_PATH_LINK|STATUSLINE_SHOW_DELTA)
+      STATUSLINE_PATH_MAX|STATUSLINE_PATH_LINK|STATUSLINE_SHOW_DELTA|STATUSLINE_THEME)
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
@@ -496,6 +505,25 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
   done < "$STATUSLINE_CONFIG_FILE"
 fi
 unset _cfg_key _cfg_val
+
+# ---- theme presets ----
+# Must stay after the config file loader and before the color variables:
+# := fills only unset or empty keys, so individual settings beat the theme.
+case "${STATUSLINE_THEME:-}" in
+  space)
+    : "${STATUSLINE_COLOR_DIR:=147}" "${STATUSLINE_COLOR_MODEL:=183}" "${STATUSLINE_COLOR_GIT:=75}"
+    : "${STATUSLINE_COLOR_CC_VERSION:=103}" "${STATUSLINE_COLOR_OUTPUT_STYLE:=103}" "${STATUSLINE_COLOR_SESSION_CMD:=103}"
+    : "${STATUSLINE_COLOR_SEP:=61}" "${STATUSLINE_COLOR_CACHE:=117}" "${STATUSLINE_COLOR_DELTA:=245}"
+    : "${STATUSLINE_COLOR_TODAY:=153}" "${STATUSLINE_COLOR_WEEK:=141}" "${STATUSLINE_COLOR_MONTH:=183}"
+    : "${STATUSLINE_COLOR_CTX_OK:=117}" "${STATUSLINE_COLOR_CTX_WARN:=221}" "${STATUSLINE_COLOR_CTX_CRIT:=203}"
+    : "${STATUSLINE_COLOR_SESSION_OK:=147}" "${STATUSLINE_COLOR_SESSION_WARN:=221}" "${STATUSLINE_COLOR_SESSION_CRIT:=203}"
+    : "${STATUSLINE_COLOR_MEM_OK:=114}" "${STATUSLINE_COLOR_MEM_WARN:=221}" "${STATUSLINE_COLOR_MEM_CRIT:=203}"
+    : "${STATUSLINE_COLOR_PR_OK:=114}" "${STATUSLINE_COLOR_PR_WARN:=221}" "${STATUSLINE_COLOR_PR_CRIT:=203}" "${STATUSLINE_COLOR_PR_DRAFT:=245}"
+    : "${STATUSLINE_ICON_DIR:=✧}" "${STATUSLINE_ICON_CONTEXT:=☾}" "${STATUSLINE_ICON_COST:=✶}"
+    : "${STATUSLINE_ICON_CACHE:=◌}" "${STATUSLINE_ICON_MEM:=◍}"
+    : "${STATUSLINE_SEP_CHAR:=⋆}"
+    ;;
+esac
 
 # ---- pre-computed color variables (no subshell forks) ----
 # _resolve_color: sets $REPLY to OVERRIDE (a STATUSLINE_COLOR_* value, 0-255)

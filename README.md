@@ -312,6 +312,34 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 
 `STATUSLINE_SHOW_GIT_DETAIL`만 기본값이 `0`(꺼짐)인 opt-in 토글입니다 — 아래 "Git 상세·PR/MR" 참고.
 
+### Themes / 테마
+
+`STATUSLINE_THEME` picks a preset of colors, icons and separator in one setting. A theme only fills in
+keys you have not set yourself, so any individual `STATUSLINE_COLOR_*` / `STATUSLINE_ICON_*` /
+`STATUSLINE_SEP_CHAR` (env var or config file) still wins. An unknown name changes nothing. The git
+segment keeps its words in every theme.
+
+`STATUSLINE_THEME`으로 색·아이콘·구분자 묶음을 한 번에 고릅니다. 테마는 직접 설정하지 않은 키만 채우므로,
+개별 `STATUSLINE_COLOR_*` / `STATUSLINE_ICON_*` / `STATUSLINE_SEP_CHAR`(환경 변수든 설정 파일이든)가 항상
+우선합니다. 없는 이름이면 아무것도 바뀌지 않습니다. git 세그먼트는 어느 테마에서나 단어로 표시합니다.
+
+```bash
+~/.claude/configure.sh set STATUSLINE_THEME space
+```
+
+| Theme | Line 1 / Line 2 |
+|-------|-----------------|
+| `default` | `📂 ~/w/myapp  main  │ Opus 4.6 …` / `🧠 Context 45.0K/200.0K …` |
+| `space` | `✧ ~/w/myapp  main  ⋆ Opus 4.6 …` / `☾ Context 45.0K/200.0K …` |
+
+`space` is a constellation theme: icons ✧ (dir) ☾ (context) ✶ (cost) ◌ (cache) ◍ (memory), separator ⋆,
+and a violet/blue palette shared with the `space` theme of
+[shell-prompt](https://github.com/Ahngbeom/shell-prompt), so the shell prompt and the statusline match.
+
+`space`는 별자리 테마입니다. 아이콘 ✧(경로) ☾(컨텍스트) ✶(비용) ◌(캐시) ◍(메모리), 구분자 ⋆, 보라·남색 팔레트를
+[shell-prompt](https://github.com/Ahngbeom/shell-prompt)의 `space` 테마와 함께 써서 셸 프롬프트와 statusline의
+모양을 맞춥니다.
+
 ### Color Customization / 색상 커스터마이징
 
 Each rendered element's [xterm 256-color](https://www.ditig.com/256-colors-cheat-sheet) code can be
