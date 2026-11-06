@@ -22,11 +22,11 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Install bats-core and jq
+      - name: Install bats-core, jq and zsh
         run: |
           npm install -g bats
           sudo apt-get update -y
-          sudo apt-get install -y jq
+          sudo apt-get install -y jq zsh
 
       - name: Run bats tests
         run: bats tests/
