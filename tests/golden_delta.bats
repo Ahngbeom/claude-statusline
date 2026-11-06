@@ -12,7 +12,8 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$TEST_HOME"
+  # A detached ccusage refresh (npx exists on CI) may still be writing here.
+  rm -rf "$TEST_HOME" 2>/dev/null || true
 }
 
 render() {
