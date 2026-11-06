@@ -39,7 +39,10 @@ if [ -n "$BASH_VERSION" ]; then
 elif [ -n "$ZSH_VERSION" ]; then
   setopt PROMPT_SUBST
   autoload -Uz add-zsh-hook
-  : "${__git_prompt_pre:=%B%F{green}%n@%m%f%b:%B%F{blue}%~%f%b}"
+  # Not ${__git_prompt_pre:=...}: the '}' of %F{green} would close the expansion.
+  if [[ -z ${__git_prompt_pre-} ]]; then
+    __git_prompt_pre='%B%F{green}%n@%m%f%b:%B%F{blue}%~%f%b'
+  fi
   __git_prompt_cmd() {
     local mr=''
     [ "${GIT_PROMPT_MR:-1}" = 0 ] || mr=$(git-mr --segment=zsh 2>/dev/null)
