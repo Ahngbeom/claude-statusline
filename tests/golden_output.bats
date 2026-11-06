@@ -139,3 +139,17 @@ EOF
 
   rm -rf "$tmp_home"
 }
+
+@test "golden: an active ccusage block with burnRate null (single entry) keeps the later fields in place" {
+  json='{"workspace":{"current_dir":"/tmp/proj"},"model":{"display_name":"Opus 4.6"},"session_id":"sess-1"}'
+  home="$BATS_TEST_TMPDIR/home"
+  seed_ccusage_cache "$home"
+  jq -c '.blocks.blocks[0].burnRate = null' "$home/.claude/stats-cache.json" >"$home/c" \
+    && mv "$home/c" "$home/.claude/stats-cache.json"
+  run bash -c 'cd "$1" && printf "%s" "$2" | HOME="$1" NO_COLOR=1 STATUSLINE_SHOW_SESSION_CMD=0 bash "$3"' _ "$home" "$json" "$STATUSLINE_SH"
+  [ "$status" -eq 0 ]
+  line2="$(sed -n '2p' <<<"$output")"
+  [[ "$line2" =~ \$12\.34\ \ [0-9]+h\ [0-9]+m ]]
+  [[ "$line2" == *"🗄 80%" ]]
+  [[ "$line2" != *"/m"* ]]
+}
