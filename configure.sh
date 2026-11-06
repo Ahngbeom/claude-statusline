@@ -792,6 +792,16 @@ _tui_refresh_all_rows() {
   done
 }
 
+# After $1 was written: a theme change moves every color/icon/separator
+# row's effective value, anything else only the cursor row's.
+_tui_refresh_for() {
+  if [ "$1" = STATUSLINE_THEME ]; then
+    _tui_refresh_all_rows
+  else
+    _tui_refresh_row "$_tui_cursor"
+  fi
+}
+
 # Buffered single-write redraw: the whole frame is built into $frame first
 # (pure string concatenation, no forks) and written with exactly one
 # `printf` call at the end, instead of ~20 separate printf/echo calls each
@@ -961,7 +971,7 @@ _tui_edit_via_prompt() {
   read -r -p "  (press Enter to continue) " _
   stty -echo -icanon min 1 time 0 2>/dev/null
   printf '\033[?25l'
-  _tui_refresh_row "$_tui_cursor"
+  _tui_refresh_for "$key"
   _tui_dirty=1
 }
 
@@ -988,7 +998,7 @@ _tui_cycle() {
       ;;
     *) return ;;
   esac
-  _tui_refresh_row "$_tui_cursor"
+  _tui_refresh_for "$key"
   _tui_dirty=1
 }
 
@@ -1011,7 +1021,7 @@ _tui_nudge() {
   [ "$new" -lt 0 ] && new=0
   [ "$new" -gt "$hi" ] && new=$hi
   _write_config_value "$key" "$new"
-  _tui_refresh_row "$_tui_cursor"
+  _tui_refresh_for "$key"
   _tui_dirty=1
 }
 
@@ -1026,8 +1036,10 @@ _tui_activate_current() {
 }
 
 _tui_reset_current() {
-  _delete_config_value "$(_tui_current_key)"
-  _tui_refresh_row "$_tui_cursor"
+  local key
+  key="$(_tui_current_key)"
+  _delete_config_value "$key"
+  _tui_refresh_for "$key"
   _tui_dirty=1
 }
 

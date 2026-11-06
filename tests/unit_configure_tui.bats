@@ -128,3 +128,43 @@ configure_sh() {
   [[ "$output" == *"Live Preview"* ]]
   [[ "$output" == *"claude-statusline configure"* ]]
 }
+
+# Sources configure.sh's functions without running main, from a copy next to a
+# copy of statusline.sh (configure.sh finds the theme presets via its own path).
+# Builds and caches every TUI row, puts the cursor on STATUSLINE_THEME, runs
+# $1, then prints the cached STATUSLINE_COLOR_DIR row.
+_tui_theme_scenario() {
+  local t="$BATS_TEST_TMPDIR"
+  sed '/^_theme_load "\$(_effective_value STATUSLINE_THEME)"$/,$d' "$CONFIGURE_SH" >"$t/configure.sh"
+  cp "$STATUSLINE_SH" "$t/statusline.sh"
+  # shellcheck disable=SC2016 # expanded by the inner bash
+  STATUSLINE_CONFIG_FILE="$t/statusline.conf" bash -c '
+    . "$1"
+    stty() { :; }
+    _saved_stty=""
+    row_of() {
+      local i
+      for i in "${!_TUI_ROWS[@]}"; do
+        [ "${_TUI_ROWS[$i]}" = "K:$1" ] && { echo "$i"; return; }
+      done
+    }
+    _tui_build_rows
+    _tui_row_text=()
+    _tui_refresh_all_rows
+    _tui_cursor=$(row_of STATUSLINE_THEME)
+    eval "$2" >/dev/null
+    printf "%s\n" "${_tui_row_text[$(row_of STATUSLINE_COLOR_DIR)]}"
+  ' _ "$t/configure.sh" "$1" </dev/null
+}
+
+@test "tui: changing the theme refreshes the rows whose value it moves" {
+  run _tui_theme_scenario '_prompt_toggle() { _write_config_value STATUSLINE_THEME space; }; _tui_edit_via_prompt STATUSLINE_THEME'
+  [ "$status" -eq 0 ]
+  [[ "$output" == "STATUSLINE_COLOR_DIR "*" 147 "* ]]
+}
+
+@test "tui: resetting the theme refreshes the rows whose value it moves" {
+  run _tui_theme_scenario '_write_config_value STATUSLINE_THEME space; _tui_refresh_all_rows; _tui_reset_current'
+  [ "$status" -eq 0 ]
+  [[ "$output" == "STATUSLINE_COLOR_DIR "*" 117 "* ]]
+}
