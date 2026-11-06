@@ -166,12 +166,22 @@ refresh_in_background() {
   fi
 }
 
+# The segment lands in PS1, which bash (promptvars) and zsh (PROMPT_SUBST)
+# expand again, and backslash-escaping doesn't help: bash decodes \$ before
+# it substitutes. So the printed fields are restricted to inert characters.
+url_re='^https?://[A-Za-z0-9._~:/?#@&+,;=%-]+$'
+
 # Tab is IFS whitespace, so splitting on it would collapse an empty pipeline field.
 record() {
   local line=''
   IFS= read -r line <"$cache" 2>/dev/null
   IFS=$'\x1f' read -r kind num murl state pipe purl <<<"${line//$'\t'/$'\x1f'}"
-  [ -n "${num:-}" ]
+  if [[ ! ${kind:-} =~ ^(mr|pr)$ ]] || [[ ! ${num:-} =~ ^[0-9]{1,9}$ ]]; then
+    kind='' num=''
+    return 1
+  fi
+  [[ ${murl:-} =~ $url_re ]] || murl=''
+  [[ ${purl:-} =~ $url_re ]] || purl=''
 }
 
 segment() {
@@ -182,8 +192,8 @@ segment() {
   esac
   esc()   { printf '%s\033[%sm%s' "$o" "$1" "$c"; }
   # BEL terminator: ST (ESC \) would put a backslash into PS1.
-  lopen() { [ "${GIT_MR_LINKS:-1}" = 0 ] || printf '%s\033]8;;%s\a%s' "$o" "$1" "$c"; }
-  lclose() { [ "${GIT_MR_LINKS:-1}" = 0 ] || printf '%s\033]8;;\a%s' "$o" "$c"; }
+  lopen() { [ "${GIT_MR_LINKS:-1}" = 0 ] || [ -z "$1" ] || printf '%s\033]8;;%s\a%s' "$o" "$1" "$c"; }
+  lclose() { [ "${GIT_MR_LINKS:-1}" = 0 ] || [ -z "$1" ] || printf '%s\033]8;;\a%s' "$o" "$c"; }
 
   case $state in ok) col=32 ;; bad) col=31 ;; draft) col=2 ;; *) col=33 ;; esac
   case $pipe in
@@ -197,9 +207,9 @@ segment() {
   esc "$col"; lopen "$u"
   if [ "$kind" = mr ]; then printf '!%s' "$num"; else printf '#%s' "$num"; fi
   [ "$state" = draft ] && printf ' draft'
-  lclose; esc 0
+  lclose "$u"; esc 0
   if [ -n "$sym" ]; then
-    printf ' '; esc "$pcol"; lopen "$pu"; printf '%s' "$sym"; lclose; esc 0
+    printf ' '; esc "$pcol"; lopen "$pu"; printf '%s' "$sym"; lclose "$pu"; esc 0
   fi
 }
 
@@ -221,6 +231,10 @@ case $mode in
       what="pull request"
       [ "$provider" = gitlab ] && what="merge request"
       echo "no open $what for $src_branch on $host/$path" >&2
+      exit 1
+    fi
+    if [ -z "$murl" ] && [ "$mode" != summary ]; then
+      echo "the $provider URL for #$num is not a plain http(s) URL; refusing to use it" >&2
       exit 1
     fi
     case $mode in
