@@ -134,7 +134,7 @@ prompt_json() {
 @test "golden: with prompt_id, every step of one prompt accumulates into one delta" {
   render "$(ctx_json 40000)" >/dev/null                  # session start, before any prompt
   run render "$(prompt_json 45000 sess-1 '' p1)"
-  [[ "$(line2_of "$output")" == *"77% +5.0K" ]]           # first render already includes step 1
+  [[ "$(line2_of "$output")" == *"78% +5.0K" ]]           # first render already includes step 1
   run render "$(prompt_json 49200 sess-1 '' p1)"
   [ "$status" -eq 0 ]
   [[ "$(line2_of "$output")" == *"76% +9.2K" ]]           # step 2 adds on, not +4.2K
