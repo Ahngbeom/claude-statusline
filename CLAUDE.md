@@ -171,7 +171,7 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 | 영역 | 마커 | 역할 |
 |------|------|------|
 | 설정 파일 로더 | `# ---- user config file` | `~/.claude/statusline.conf`를 allowlist 기반으로 파싱, env var 우선 |
-| 테마 프리셋 | `# ---- theme presets` | `STATUSLINE_THEME`(현재 `space`)이 비어 있는 `STATUSLINE_COLOR_*`/`ICON_*`/`SEP_CHAR`만 `:=`로 채움. 설정 파일 로더 다음, 색상 변수 앞이어야 개별 설정이 이김 |
+| 테마 프리셋 | `# ---- theme presets` | `STATUSLINE_THEME`(현재 `space`)이 비어 있는 `STATUSLINE_COLOR_*`/`ICON_*`/`SEP_CHAR`만 `:=`로 채움. 설정 파일 로더 다음, 색상 변수 앞이어야 개별 설정이 이김. `configure.sh`가 `_apply_theme()`를 sed로 꺼내 실행해 `get`/`list`/TUI에 테마 값을 보여 주므로 함수 이름과 단독 줄 닫는 중괄호를 유지 |
 | 색상 변수 | `# ---- pre-computed color variables` | `NO_COLOR` 대응, 서브셸 없이 ANSI 코드 사전 계산 |
 | progress bar 문자 | `# ---- progress bar characters` | `STATUSLINE_UNICODE` 여부로 `▰▱` 또는 `=-` 선택 |
 | compact mode 감지 | `# ---- compact mode detection` | `$COLUMNS`/`STATUSLINE_COMPACT`/`STATUSLINE_COMPACT_WIDTH`로 `is_compact_mode()` 판정, `_compact` 변수에 저장 |
