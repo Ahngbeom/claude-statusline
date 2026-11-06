@@ -293,6 +293,8 @@ _write_config_value() {
     printf '%s=%s\n' "$key" "$value"
   } > "$tmp"
   mv "$tmp" "$file"
+  [ "$key" = STATUSLINE_THEME ] && _theme_load "$(_effective_value STATUSLINE_THEME)"
+  return 0
 }
 
 _delete_config_value() {
@@ -302,9 +304,48 @@ _delete_config_value() {
   tmp=$(mktemp "$file.XXXXXX") || return 1
   _config_lines_without_key "$key" > "$tmp"
   mv "$tmp" "$file"
+  [ "$key" = STATUSLINE_THEME ] && _theme_load "$(_effective_value STATUSLINE_THEME)"
+  return 0
 }
 
-# ---- effective value/source (env > config file > default) ----
+# ---- effective value/source (env > config file > theme > default) ----
+# Caches the KEY=VALUE pairs theme $1 sets, by running _apply_theme from the
+# sibling statusline.sh once. Called from the main shell (start, theme writes,
+# reset) because most lookups run inside $(...), where a cache fill is lost.
+_theme_cache_name=__unloaded__ _theme_cache=''
+_theme_load() {
+  local fn
+  _theme_cache_name="$1" _theme_cache=''
+  case "$1" in ''|default) return 0 ;; esac
+  fn=$(sed -n '/^_apply_theme() {$/,/^}$/p' "$(_statusline_bin)" 2>/dev/null)
+  [ -n "$fn" ] || return 0
+  # shellcheck disable=SC2086 # ALL_KEYS is a space-separated list
+  _theme_cache=$(
+    for k in $ALL_KEYS; do unset "$k"; done
+    eval "$fn"
+    # shellcheck disable=SC2034 # read by the eval'd _apply_theme
+    STATUSLINE_THEME="$1"
+    _apply_theme
+    for k in $ALL_KEYS; do
+      [ -n "${!k-}" ] && printf '%s=%s\n' "$k" "${!k}"
+    done
+  )
+}
+
+# Prints what the selected STATUSLINE_THEME gives $1; fails if it leaves $1 alone.
+_theme_value() {
+  local key="$1" line
+  [ "$key" = STATUSLINE_THEME ] && return 1
+  [ "$_theme_cache_name" = __unloaded__ ] && _theme_load "$(_effective_value STATUSLINE_THEME)"
+  while IFS= read -r line; do
+    if [ "${line%%=*}" = "$key" ]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done <<<"$_theme_cache"
+  return 1
+}
+
 _effective_value() {
   local key="$1" v
   if [ -n "${!key+x}" ]; then
@@ -315,7 +356,7 @@ _effective_value() {
     printf '%s' "$v"
     return
   fi
-  _key_default "$key"
+  _theme_value "$key" || _key_default "$key"
 }
 
 _effective_source() {
@@ -324,6 +365,8 @@ _effective_source() {
     echo "env"
   elif _read_config_value "$key" >/dev/null; then
     echo "config"
+  elif _theme_value "$key" >/dev/null; then
+    echo "theme"
   else
     echo "default"
   fi
@@ -450,6 +493,7 @@ cmd_reset() {
     esac
   fi
   [ -f "$file" ] && rm -f "$file"
+  _theme_load "$(_effective_value STATUSLINE_THEME)"
   echo "configure.sh: removed $file (all settings back to defaults)"
 }
 
@@ -1092,4 +1136,5 @@ main() {
   esac
 }
 
+_theme_load "$(_effective_value STATUSLINE_THEME)"
 main "$@"

@@ -289,3 +289,35 @@ configure_sh() {
   [ "$status" -eq 0 ]
   ! grep -q '^STATUSLINE_THEME=' "$STATUSLINE_CONFIG_FILE"
 }
+
+@test "configure: get reports the theme's value for keys left unset" {
+  configure_sh set STATUSLINE_THEME space
+  run configure_sh get STATUSLINE_COLOR_DIR
+  [ "$output" = "147" ]
+  run configure_sh get STATUSLINE_ICON_DIR
+  [ "$output" = "✧" ]
+}
+
+@test "configure: an individual setting beats the theme in get" {
+  configure_sh set STATUSLINE_THEME space
+  configure_sh set STATUSLINE_COLOR_DIR 200
+  run configure_sh get STATUSLINE_COLOR_DIR
+  [ "$output" = "200" ]
+  STATUSLINE_COLOR_DIR=196 run configure_sh get STATUSLINE_COLOR_DIR
+  [ "$output" = "196" ]
+}
+
+@test "configure: list marks theme-provided values with the source 'theme'" {
+  configure_sh set STATUSLINE_THEME space
+  run configure_sh list
+  [ "$status" -eq 0 ]
+  grep -Eq '^STATUSLINE_COLOR_DIR +147 +theme ' <<<"$output"
+  grep -Eq '^STATUSLINE_UNICODE +0 +default ' <<<"$output"
+}
+
+@test "configure: switching the theme back to default restores the plain defaults" {
+  configure_sh set STATUSLINE_THEME space
+  configure_sh set STATUSLINE_THEME default
+  run configure_sh get STATUSLINE_COLOR_DIR
+  [ "$output" = "117" ]
+}
