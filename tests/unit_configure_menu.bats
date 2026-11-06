@@ -47,9 +47,9 @@ menu_with_input() {
 }
 
 @test "menu: changing a value inside a category persists it and redraws the preview panel" {
-  # top menu -> 1 (Colors & bar style) -> NO_COLOR=1 -> skip UNICODE -> skip
-  # SEP_CHAR -> back at top menu -> 0 (exit)
-  run menu_with_input "1\n1\n\n\n0\n"
+  # top menu -> 1 (Colors & bar style) -> skip THEME -> NO_COLOR=1 -> skip
+  # UNICODE -> skip SEP_CHAR -> back at top menu -> 0 (exit)
+  run menu_with_input "1\n\n1\n\n\n0\n"
   [ "$status" -eq 0 ]
   grep -q '^NO_COLOR=1$' "$STATUSLINE_CONFIG_FILE"
   # one screen before the edit, one right after the edit, one on return to

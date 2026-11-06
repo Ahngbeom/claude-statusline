@@ -100,7 +100,7 @@ _tui_rows_snapshot() {
   first=$(sed -n '1p' <<<"$output")
   second=$(sed -n '2p' <<<"$output")
   [ "$first" = "H:Colors & bar style" ]
-  [ "$second" = "K:NO_COLOR" ]
+  [ "$second" = "K:STATUSLINE_THEME" ]
 }
 
 @test "_tui_build_rows: every K: row names a key configure.sh actually recognizes" {
