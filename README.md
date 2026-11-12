@@ -17,7 +17,7 @@ Claude Code 터미널에 다양한 세션 정보를 표시합니다:
 
 | Line | Content / 내용 |
 |------|----------------|
-| 1 | 📂 Directory (shortened when long) + Git branch (uncommitted files, commits to push/pull, optional breakdown) + PR/MR `!289 ✔` (clickable) │ Model, CLI version, Output style, ⌘ Session launch flags │ 💻 Memory |
+| 1 | 📂 Directory (shortened when long) + Git branch (uncommitted files, commits to push/pull, optional breakdown) + PR/MR `!289 ✔` (clickable) │ Model (effort, thinking, fast), CLI version, Output style, ⌘ Session launch flags │ 💻 Memory |
 | 2 | 🧠 Context usage (bar, + last prompt's change) │ Session time + tokens + cost (+ last prompt's cost) │ 🗄 Cache + Speed |
 | 3 | 💰 Today │ Week │ Month usage & costs |
 
@@ -30,7 +30,7 @@ shrinks — see "Compact Mode" under Customization below.
 ### Example Output / 예시 출력
 
 ```
-📂 ~/projects/myapp  main (3 uncommitted, ↑2 to push) │ Opus 4.6  v1.0.44  explanatory  ⌘ -c plan │ 💻 Mem 42%
+📂 ~/projects/myapp  main (3 uncommitted, ↑2 to push) │ Opus 4.6 (high, thinking)  v1.0.44  explanatory  ⌘ -c plan │ 💻 Mem 42%
 🧠 Context 45.2K/200K [============--------] 77% +4.2K │ Session 1.2M $0.12 +$0.03  3h 42m [====------] │ 🗄 87%  12.5K/m
 💰 Today 2.1M  $4.32 │ Week 15.8M  $31.20 │ Month 48.2M  $95.50
 ```
@@ -298,6 +298,7 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 | `STATUSLINE_HYPERLINKS=0` | Only the links on the PR/MR number, pipeline mark and directory (text stays) / PR/MR·파이프라인·디렉터리 링크만 (글자는 유지) |
 | `STATUSLINE_SHOW_CC_VERSION=0` | Line 1 CLI version (`v1.0.44`) |
 | `STATUSLINE_SHOW_OUTPUT_STYLE=0` | Line 1 output style |
+| `STATUSLINE_SHOW_EFFORT=0` | Line 1 `(high, thinking, fast)` after the model / 모델명 뒤 effort·thinking·fast |
 | `STATUSLINE_SHOW_MEM=0` | Line 1 `💻 Mem NN%` |
 | `STATUSLINE_SHOW_SESSION_CMD=0` | Line 1 `⌘ ...` session launch flags / Line 1 세션 기동 옵션 |
 | `STATUSLINE_SHOW_SESSION=0` | Line 2 Session segment (tokens/cost/time/bar) |
@@ -404,7 +405,7 @@ Line 1에 현재 세션이 어떤 CLI 플래그로 시작되었는지 표시되�
 | `--permission-mode <m>` | the mode name itself (`plan`, `acceptEdits`, ...) |
 | `--dangerously-skip-permissions` | `bypass` |
 | `--bare` / `--worktree` | `bare` / `wt` |
-| `--effort` / `--agent` / `--teammate-mode` | `effort:<v>` / `agent:<v>` / `teammate:<v>` |
+| `--effort` / `--agent` / `--teammate-mode` | `effort:<v>` / `agent:<v>` / `teammate:<v>` (`effort:<v>` drops out while the model shows the live level — see "Model Effort") |
 | `--add-dir` | `+dir` |
 | `--settings` / `--mcp-config` / `--agents` | `+settings` / `+mcp` / `+agents` (values never shown) |
 | `--system-prompt[-file]`, `--append-system-prompt[-file]` | `+sysprompt` (value never shown) |
@@ -444,6 +445,29 @@ Linux는 서브프로세스 0개(`/proc/<pid>/cmdline`), macOS/BSD는 통상 `ps
 2. 래퍼·멀티플렉서·셸 함수가 Claude Code와 statusline 스크립트 사이에 3단계 넘게 끼어 있으면 자동 감지가
    실패해 세그먼트가 비어 있게 됩니다. 이 경우 `STATUSLINE_SESSION_CMD`(환경변수 또는 `configure.sh set`)에
    파싱할 명령어 문자열을 직접 지정하세요 — 위와 완전히 동일한 화이트리스트를 통과합니다.
+
+### Model Effort / 모델 effort 표시
+
+The model name carries the session's reasoning effort, plus `thinking` / `fast` while extended
+thinking / fast mode are on (stdin `effort.level`, `thinking.enabled`, `fast_mode`). A mid-session
+`/effort` change shows up on the next render. The compact layout keeps only the effort.
+
+모델명 뒤에 세션의 reasoning effort와, extended thinking·fast 모드가 켜져 있으면 `thinking`/`fast`가
+붙습니다(stdin `effort.level`, `thinking.enabled`, `fast_mode`). 세션 중 `/effort`로 바꾼 값도 다음
+렌더링에 반영됩니다. 축약 레이아웃에는 effort만 남습니다.
+
+```
+Opus 5.5 (high, thinking, fast)
+Opus 5.5 (xhigh)
+Haiku 4.5 (thinking)         # model without effort support
+Opus 5.5                     # nothing on, or STATUSLINE_SHOW_EFFORT=0
+```
+
+- While the live level is shown, the launch-time `effort:<v>` drops out of `⌘ ...` (`/effort` outranks `--effort`).
+  실시간 레벨이 표시되는 동안 `⌘ ...`의 기동 시점 `effort:<v>`는 빠집니다.
+- Not shown: a turn raised by `ultrathink` or a skill's `effort` frontmatter, and a subagent's effort —
+  the statusline input reports the session level only.
+  `ultrathink`·skill `effort`로 올라간 턴과 subagent의 effort는 표시되지 않습니다 — statusline 입력에는 세션 레벨만 옵니다.
 
 ### Git Detail & PR/MR / Git 상세·PR/MR
 
@@ -592,7 +616,7 @@ Claude Code >= v2.1.153 sets `$COLUMNS`/`$LINES` to the real terminal size befor
 statusline script (stdout is captured, so `tput cols`-style detection doesn't work from inside the
 script). When `$COLUMNS` is narrower than `STATUSLINE_COMPACT_WIDTH` (default 80 — e.g. a portrait
 tablet/mobile-style split terminal), the statusline automatically switches to a shorter layout:
-directory basename only, no CLI version/output style/Mem on Line 1, no "Context" label word and a
+directory basename only, no CLI version/output style/Mem on Line 1 (the model keeps only its effort level), no "Context" label word and a
 narrower bar on Line 2, and Line 3 collapsed to just session cost/time + today's cost (no token
 counts, no Week/Month, no cache hit rate/speed).
 
@@ -600,11 +624,11 @@ Claude Code >= v2.1.153는 스크립트 실행 직전에 `$COLUMNS`/`$LINES`를 
 (stdout이 캡처되므로 `tput cols` 방식은 스크립트 내부에서 동작하지 않습니다). `$COLUMNS`가
 `STATUSLINE_COMPACT_WIDTH`(기본값 80) 미만이면 — 예: 태블릿/모바일처럼 세로로 긴 분할 터미널 —
 자동으로 축약 레이아웃으로 전환됩니다: 디렉터리는 basename만, Line 1의 CLI 버전/output style/Mem
-생략, Line 2는 "Context" 라벨 없이 좁은 바, Line 3는 세션 비용/시간 + 오늘 비용만 남기고 토큰
+생략(모델명 뒤에는 effort만 남음), Line 2는 "Context" 라벨 없이 좁은 바, Line 3는 세션 비용/시간 + 오늘 비용만 남기고 토큰
 수·Week/Month·캐시 적중률/속도는 생략됩니다.
 
 ```
-📂 myapp  main* ↑2 │ Opus 4.6
+📂 myapp  main* ↑2 │ Opus 4.6 (high)
 🧠 45.2K/200K [====----] 77%
 💰 Sess $0.12 3h 42m │ Today $4.32
 ```

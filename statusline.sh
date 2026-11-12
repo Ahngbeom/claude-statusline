@@ -1,13 +1,13 @@
 #!/bin/bash
 # claude-statusline - A detailed statusline for Claude Code CLI
 # Repository: https://github.com/ahngbeom/claude-statusline
-# Version: 1.14.0
+# Version: 1.15.0
 # License: MIT
 #
 # Features:
 #   Line 1: Directory (shortened when long) + Git branch (uncommitted / to push / to pull,
 #           opt-in staged/modified/... breakdown) + PR/MR !N/#N
-#           (clickable, pipeline mark via bin/git-mr) │ Model, CLI version, Output style,
+#           (clickable, pipeline mark via bin/git-mr) │ Model (effort), CLI version, Output style,
 #           session launch flags (⌘ -c / plan / bypass ...)
 #   Line 2: Context usage (▰▱ bar) │ Session time + tokens │ Cache + Speed, plus what
 #           the last prompt added (+4.2K, +$0.03)
@@ -39,6 +39,7 @@
 #                                    (with STATUSLINE_PATH_LINK=1) the directory (default 1)
 #   STATUSLINE_SHOW_CC_VERSION=1/0   Line 1 CLI version (default 1)
 #   STATUSLINE_SHOW_OUTPUT_STYLE=1/0 Line 1 output style (default 1)
+#   STATUSLINE_SHOW_EFFORT=1/0       Line 1 "(high, thinking, fast)" after the model (default 1)
 #   STATUSLINE_SHOW_MEM=1/0          Line 1 memory indicator (default 1)
 #   STATUSLINE_SHOW_SESSION_CMD=1/0  Line 1 session launch flags (default 1)
 #   STATUSLINE_SESSION_CMD=<cmd>     Override the auto-detected launch command
@@ -443,6 +444,14 @@
 #     individual STATUSLINE_COLOR_*/ICON_*/SEP_CHAR still wins. The git
 #     segment keeps its words.
 
+# Changes (v1.15.0):
+#   - The model name carries the session's reasoning effort, plus thinking
+#     and fast mode when they are on: "Opus 5.5 (high, thinking, fast)".
+#     The compact layout keeps only the effort. Read from stdin
+#     effort.level / thinking.enabled / fast_mode, so a mid-session /effort
+#     change shows up; the launch-time "⌘ effort:<v>" is dropped while the
+#     live level is shown. STATUSLINE_SHOW_EFFORT=0 turns it off.
+
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
 IFS= read -r -d '' input
@@ -466,7 +475,7 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
       STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_GIT_DETAIL|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
       STATUSLINE_SHOW_SESSION_CMD|STATUSLINE_SESSION_CMD|STATUSLINE_SHOW_PR|STATUSLINE_HYPERLINKS|\
       STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH|\
-      STATUSLINE_PATH_MAX|STATUSLINE_PATH_LINK|STATUSLINE_SHOW_DELTA|STATUSLINE_THEME)
+      STATUSLINE_PATH_MAX|STATUSLINE_PATH_LINK|STATUSLINE_SHOW_DELTA|STATUSLINE_THEME|STATUSLINE_SHOW_EFFORT)
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
@@ -988,7 +997,9 @@ _format_session_cmd() {
       # _sc_sanitize; otherwise the bare flag name still records that it was
       # used.
       --permission-mode)              _sc_sanitize "${1-}"; label="${_sc_val:-perm}" ;;
-      --effort)                       _sc_sanitize "${1-}"; label="effort${_sc_val:+:$_sc_val}" ;;
+      # _sc_skip_effort is set by the "model label" section, which must run first.
+      --effort)                       [ -n "${_sc_skip_effort-}" ] && continue
+                                      _sc_sanitize "${1-}"; label="effort${_sc_val:+:$_sc_val}" ;;
       --agent)                        _sc_sanitize "${1-}"; label="agent${_sc_val:+:$_sc_val}" ;;
       --teammate-mode)                _sc_sanitize "${1-}"; label="teammate${_sc_val:+:$_sc_val}" ;;
     esac
@@ -1183,7 +1194,8 @@ if command -v jq >/dev/null 2>&1; then
   IFS=$'\x1f' read -r current_dir model_name session_id cc_version output_style \
     ctx_input_tokens ctx_window_size \
     session_cost_usd transcript_path rate_limits_json rl5h_pct rl5h_reset \
-    pr_number pr_url pr_state pr_kind ws_project_dir prompt_id < <(
+    pr_number pr_url pr_state pr_kind ws_project_dir prompt_id \
+    effort_level thinking_enabled fast_mode < <(
     jq -r '[
       (.workspace.current_dir // .cwd // "unknown"),
       (.model.display_name // "Claude"),
@@ -1202,7 +1214,10 @@ if command -v jq >/dev/null 2>&1; then
       (.pr.review_state // ""),
       (.pr.kind // ""),
       (.workspace.project_dir // ""),
-      (.prompt_id // "")
+      (.prompt_id // ""),
+      (.effort.level? // "" | tostring),
+      (if (.thinking.enabled? // false) == true then "true" else "" end),
+      (if .fast_mode == true then "true" else "" end)
     ] | join("\u001f")' 2>/dev/null <<< "$input"
   )
 else
@@ -1218,6 +1233,7 @@ else
   rl5h_pct=""
   rl5h_reset=""
   pr_number=""
+  effort_level="" thinking_enabled="" fast_mode=""
 fi
 current_dir_raw="$current_dir"
 _home_tilde "$current_dir"; current_dir="$REPLY"
@@ -1386,6 +1402,22 @@ fi
 mem_pct=""
 if [ "$_compact" -eq 0 ] && [ "${STATUSLINE_SHOW_MEM:-1}" != "0" ]; then
   mem_pct=$(get_mem_usage)
+fi
+
+# ---- model label (effort / thinking / fast) ----
+_model_label="$model_name"
+_sc_skip_effort=""
+if [ "${STATUSLINE_SHOW_EFFORT:-1}" != "0" ]; then
+  _ml=""
+  if [[ "$effort_level" =~ ^[a-z][a-z0-9_-]{0,11}$ ]]; then
+    _ml="$effort_level"
+    _sc_skip_effort=1
+  fi
+  if [ "$_compact" -eq 0 ]; then
+    [ "$thinking_enabled" = "true" ] && _ml="${_ml:+$_ml, }thinking"
+    [ "$fast_mode" = "true" ] && _ml="${_ml:+$_ml, }fast"
+  fi
+  [ -n "$_ml" ] && _model_label="$model_name ($_ml)"
 fi
 
 # ---- session invocation ----
@@ -1705,7 +1737,7 @@ if [ "$_compact" -eq 1 ]; then
     printf '  %s' "$pr_seg"
   fi
   printf '  %s%s%s' "$_sep" "$_sep_char" "$_rst"
-  printf ' %s%s%s' "$_model" "$model_name" "$_rst"
+  printf ' %s%s%s' "$_model" "$_model_label" "$_rst"
 
   # Line 2: 🧠 used/max bar pct%
   ctx_part=""
@@ -1767,7 +1799,7 @@ else
     printf '  %s' "$pr_seg"
   fi
   printf '  %s%s%s' "$_sep" "$_sep_char" "$_rst"
-  printf ' %s%s%s' "$_model" "$model_name" "$_rst"
+  printf ' %s%s%s' "$_model" "$_model_label" "$_rst"
   if [ "${STATUSLINE_SHOW_CC_VERSION:-1}" != "0" ] && [ -n "$cc_version" ] && [ "$cc_version" != "null" ]; then
     printf '  %sv%s%s' "$_ccver" "$cc_version" "$_rst"
   fi
