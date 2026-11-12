@@ -54,6 +54,7 @@ Claude Code CLI → stdin(세션 JSON) → statusline.sh → stdout(3줄 ANSI �
 | Git | `git --no-optional-locks status --porcelain=v2 --branch --show-stash` 1회 (+ 상세 모드면 `rev-parse --git-dir` 1회) | Line 1 (브랜치명·dirty·ahead/behind·상세 개수) | — |
 | stdin `pr` | Claude Code가 전달 (`number`/`url`/`review_state`/`kind`) | Line 1 (PR/MR 번호, 리뷰 상태 색) | Primary |
 | stdin `effort.level`/`thinking.enabled`/`fast_mode` | Claude Code가 전달 | Line 1 (모델명 뒤 `(high, thinking, fast)`) | 있으면 `⌘`의 기동 시점 `effort:`보다 우선 |
+| 세션 JSONL `perTurnEffort` | `transcript_path` 마지막 50줄, `STATUSLINE_SHOW_TURN_EFFORT=1`일 때만 | Line 1 (`turn:xhigh`) | 세션 레벨과 다를 때만 |
 | git-mr 캐시 | `bin/git-mr --cached` (`$XDG_CACHE_HOME/git-mr/`, TTL 120초, 백그라운드 갱신) | Line 1 (파이프라인 표시) | `pr`과 같은 PR/MR일 때만 |
 | 부모 프로세스 argv | `/proc/<pid>/cmdline` (Linux) 또는 `ps -o ppid=,args=` (macOS/BSD) | Line 1 (세션 기동 CLI 플래그) | — |
 | 사용자 설정 파일 | `~/.claude/statusline.conf` (`configure.sh`가 씀) | 전체 (표시 여부/색상/compact 등) | env var보다 후순위 |
@@ -106,7 +107,8 @@ Claude Code가 전달하는 입력. `jq`로 한 번에 파싱하며 Unit Separat
 여기에 반영되지 않는다고 명시한다. subagent effort는 별도 설정 `subagentStatusLine`의 `tasks[].effort`에만
 있다. 턴 단위 실제 effort는 transcript JSONL의 assistant 레코드 `effort`/`perTurnEffort`(문서화되지 않은
 내부 필드)에만 보인다 — 2026-11-12 v2.1.322 실측: 세션 `high`에서 ultrathink 턴은 두 필드 모두 `xhigh`로
-기록됨. skill effort가 같은 필드에 찍히는지는 미확인.
+기록됨(다음 일반 턴은 다시 `high`). skill effort가 같은 필드에 찍히는지는 미확인. `STATUSLINE_SHOW_TURN_EFFORT`
+(opt-in)가 이 필드를 쓴다 — 비공식 필드라 기본값으로 켜지 말 것.
 
 `workspace.project_dir`(세션을 시작한 디렉터리)와 `prompt_id`(처리 중인 사용자 프롬프트 UUID, 첫 입력
 전에는 없음)는 공식 문서 스키마에 있고 이 스크립트가 쓴다: 전자는 경로 축약 때 프로젝트 폴더명을
@@ -145,20 +147,20 @@ rate-limit `resets_at` 도달 / prompt cache `expires_at` 도달(+ 설정 시 `r
 `configure.sh set/get/unset/list/reset/path` CLI로 자신의 표시 설정을 영구 저장할 수 있다.
 `statusline.sh`는 시작 시(`STATUSLINE_CONFIG_FILE` 환경변수로 경로 오버라이드 가능, 기본
 `~/.claude/statusline.conf`) 이 파일을 `KEY=VALUE` 줄 단위로 파싱해 읽는다 — `source`하지 않고
-27개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
+28개 키 allowlist에 대해서만 `printf -v`로 대입하며(임의 코드 실행 방지), **이미 설정된 환경변수가
 있으면 그 키는 건너뛴다** (env var가 항상 config 파일보다 우선). 서브프로세스를 하나도 만들지
 않는다 (순수 bash while-read). `STATUSLINE_COLOR_*`/`STATUSLINE_ICON_*`/`STATUSLINE_THRESHOLD_*`/
-`STATUSLINE_SEP_CHAR`는 이 27개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
+`STATUSLINE_SEP_CHAR`는 이 28개와 별개로 prefix-glob arm이 처리하므로, 그 계열에 키를 추가할 때는
 로더를 건드리지 않아도 된다 (`configure.sh`의 4개 레지스트리만 갱신).
 
-27개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
+28개 키는 `configure.sh` 안에서 4가지 타입으로 분류된다 (`_key_type()` 참고):
 - **presence**: `NO_COLOR`/`STATUSLINE_UNICODE`/`STATUSLINE_HIDE_COST`/`STATUSLINE_PATH_LINK` — `statusline.sh`가 `-z`/`-n`으로
   검사하므로 "켬"은 `KEY=1`을 쓰고 "끔"은 **키 자체를 삭제**해야 한다 (`KEY=0`을 쓰면 `-z`가
   거짓이 되어 오히려 "켬"으로 해석됨 — `configure.sh`가 이 변환을 대신 처리)
 - **tristate**: `STATUSLINE_COMPACT` — `1`/`0`/키 삭제(`$COLUMNS` 자동 감지로 복귀) 3가지
 - **numeric**: `STATUSLINE_COMPACT_WIDTH`, `STATUSLINE_MAX_CONTEXT`, `STATUSLINE_PATH_MAX`
-- **bool**: `STATUSLINE_SHOW_*` 16개 + `STATUSLINE_HYPERLINKS` — 값 기반, 기본값 `1`(표시), `0`이면 숨김.
-  `STATUSLINE_SHOW_GIT_DETAIL`만 기본값 `0`(opt-in)이라 `configure.sh`의 `_key_default()`에 명시돼 있다
+- **bool**: `STATUSLINE_SHOW_*` 17개 + `STATUSLINE_HYPERLINKS` — 값 기반, 기본값 `1`(표시), `0`이면 숨김.
+  `STATUSLINE_SHOW_GIT_DETAIL`/`STATUSLINE_SHOW_TURN_EFFORT`만 기본값 `0`(opt-in)이라 `configure.sh`의 `_key_default()`에 명시돼 있다
 - **text**: `STATUSLINE_SESSION_CMD` — 임의 문자열이지만 원문 렌더링은 하지 않고
   `_format_session_cmd` 화이트리스트를 통과시키므로 주입 표면이 없다 (`STATUSLINE_ICON_*`/
   `STATUSLINE_SEP_CHAR`도 같은 `text` 타입이지만 그쪽은 `printf %s` 인자로만 쓰인다는 다른 근거,
@@ -193,7 +195,7 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 | rate limits 캐시 | `# ---- rate limits cache` | stdin `rate_limits`를 변형 없이 `~/.claude/rate-limits-cache.json`에 atomic write(외부 소비자용 side-channel — 이 스크립트의 stdout 렌더링과 무관) |
 | 컨텍스트 계산 | `# ---- context window calculation` | stdin context_window 우선, JSONL fallback |
 | ccusage 통합 | `# ---- ccusage integration` | 일/주/월 통계, 세션 시간, 캐시 히트율 |
-| 모델 라벨 | `# ---- model label` (`# ---- memory usage` 다음) | `effort.level`(`^[a-z][a-z0-9_-]{0,11}$`만 통과)·`thinking`·`fast`로 `$_model_label` 조립. compact면 effort만. 실시간 레벨을 표시하면 `_sc_skip_effort=1`을 세워 `_format_session_cmd`가 `--effort`를 건너뛰게 하므로 아래 세션 기동 옵션 수집보다 **먼저** 있어야 함 |
+| 모델 라벨 | `# ---- model label` (`# ---- memory usage` 다음) | `effort.level`(`^[a-z][a-z0-9_-]{0,11}$`만 통과)·`thinking`·`fast`로 `$_model_label` 조립. compact면 effort만. `STATUSLINE_SHOW_TURN_EFFORT=1`이면 `_last_turn_effort`(`# ---- turn effort (transcript)` 섹션, transcript 마지막 50줄에서 sidechain이 아닌 마지막 assistant 레코드의 `perTurnEffort`, `tail` 1포크)로 `turn:<v>` 추가. 실시간 레벨을 표시하면 `_sc_skip_effort=1`을 세워 `_format_session_cmd`가 `--effort`를 건너뛰게 하므로 아래 세션 기동 옵션 수집보다 **먼저** 있어야 함 |
 | 세션 기동 옵션 수집 | `# ---- session invocation` (렌더 직전, `# ---- model label` 다음) | `_compact=0` + `STATUSLINE_SHOW_SESSION_CMD!=0`일 때만 `_gather_session_argv` → `_format_session_cmd` 실행해 `$_session_cmd` 설정 |
 | PR/MR | `# ---- pull request / merge request` | stdin `pr`로 `!N`/`#N` 세그먼트 조립, `_link()`(OSC 8, URL 허용 문자만)로 링크. `git-mr`이 PATH에 있고 기록이 같은 PR/MR이면 파이프라인 표시 추가 |
 | 직전 질문 변화량 | `# ---- last-change deltas` | 세션별 상태 파일을 `read`로 읽어 검증(source 금지), 기준값은 **이전 `prompt_id`의 마지막 값**(질문 제출은 재실행 트리거가 아니라서 새 prompt_id의 첫 렌더에는 이미 첫 단계가 반영돼 있음). 값이 바뀔 때만 다시 씀. 새 세션 파일을 만들 때만 7일 지난 파일을 백그라운드 `find`로 정리 |
@@ -244,7 +246,7 @@ Session/Cache/Speed/Today/Week/Month 여섯 개가 전부 `0`이 아닌 한 항�
 - `STATUSLINE_HIDE_COST=1` 환경변수로 세션 비용(Line 2)과 Line 3 전체 숨김
 - `STATUSLINE_COMPACT=1`/`=0` 환경변수로 축약 레이아웃 강제 on/off (미설정 시 `$COLUMNS` 자동 감지)
 - `STATUSLINE_COMPACT_WIDTH=<cols>` 환경변수로 자동 축약 전환 기준 폭 오버라이드 (기본값 80)
-- `STATUSLINE_SHOW_*=1/0` 16개 환경변수(GIT/GIT_STATUS/GIT_DETAIL/PR/EFFORT/CC_VERSION/OUTPUT_STYLE/MEM/SESSION_CMD/SESSION/CACHE/SPEED/DELTA/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
+- `STATUSLINE_SHOW_*=1/0` 17개 환경변수(GIT/GIT_STATUS/GIT_DETAIL/PR/EFFORT/TURN_EFFORT/CC_VERSION/OUTPUT_STYLE/MEM/SESSION_CMD/SESSION/CACHE/SPEED/DELTA/TODAY/WEEK/MONTH)로 라인별 세그먼트 표시 여부 개별 제어 (기본값 1=표시, `0`이면 숨김이면서 해당 서브프로세스 호출도 스킵)
 - `STATUSLINE_SESSION_CMD=<cmd>` 환경변수로 부모 프로세스 argv 자동 탐색을 건너뛰고 기동 명령어를 직접 지정 (래퍼/멀티플렉서가 프로세스 체인을 3단계 넘게 늘려 자동 탐색이 실패하는 환경의 탈출구 겸, 골든 테스트의 플랫폼 독립 seam — 원문 렌더링이 아니라 자동 탐색과 동일한 화이트리스트를 통과한다)
 - 위 모든 env var는 `~/.claude/statusline.conf`(`configure.sh`가 관리)로도 설정 가능하며, 이미 설정된 env var가 항상 config 파일 값보다 우선함
 - ccusage 없이도 Line 1~2는 정상 동작해야 함 (graceful degradation)

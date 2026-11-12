@@ -309,9 +309,9 @@ All default to `1` (shown); set to `0` to hide. `STATUSLINE_SHOW_GIT=0`/`STATUSL
 | `STATUSLINE_SHOW_WEEK=0` | Line 3 Week |
 | `STATUSLINE_SHOW_MONTH=0` | Line 3 Month |
 
-`STATUSLINE_SHOW_GIT_DETAIL` is the one opt-in toggle (default `0`) — see "Git Detail & PR/MR" below.
+`STATUSLINE_SHOW_GIT_DETAIL` and `STATUSLINE_SHOW_TURN_EFFORT` are opt-in (default `0`) — see "Git Detail & PR/MR" and "Model Effort" below.
 
-`STATUSLINE_SHOW_GIT_DETAIL`만 기본값이 `0`(꺼짐)인 opt-in 토글입니다 — 아래 "Git 상세·PR/MR" 참고.
+`STATUSLINE_SHOW_GIT_DETAIL`과 `STATUSLINE_SHOW_TURN_EFFORT`는 기본값이 `0`(꺼짐)인 opt-in 토글입니다 — 아래 "Git 상세·PR/MR", "모델 effort 표시" 참고.
 
 ### Themes / 테마
 
@@ -465,9 +465,31 @@ Opus 5.5                     # nothing on, or STATUSLINE_SHOW_EFFORT=0
 
 - While the live level is shown, the launch-time `effort:<v>` drops out of `⌘ ...` (`/effort` outranks `--effort`).
   실시간 레벨이 표시되는 동안 `⌘ ...`의 기동 시점 `effort:<v>`는 빠집니다.
-- Not shown: a turn raised by `ultrathink` or a skill's `effort` frontmatter, and a subagent's effort —
-  the statusline input reports the session level only.
-  `ultrathink`·skill `effort`로 올라간 턴과 subagent의 effort는 표시되지 않습니다 — statusline 입력에는 세션 레벨만 옵니다.
+- A subagent's effort is never shown — the statusline input reports the session level only.
+  subagent의 effort는 표시되지 않습니다 — statusline 입력에는 세션 레벨만 옵니다.
+
+**Turn effort (opt-in)** — `STATUSLINE_SHOW_TURN_EFFORT=1` adds `turn:<level>` when the most recent
+response ran at a level other than the session's, as with `ultrathink` or a skill's `effort` frontmatter.
+Full layout only.
+
+**턴 effort (opt-in)** — `STATUSLINE_SHOW_TURN_EFFORT=1`이면 가장 최근 응답이 세션과 다른 레벨로
+실행됐을 때(`ultrathink`, skill `effort` frontmatter) `turn:<level>`을 덧붙입니다. 전체 레이아웃 전용.
+
+```
+Opus 5.5 (high, turn:xhigh, thinking)    # ultrathink turn in a high-effort session
+```
+
+- It reads the last 50 lines of the session transcript on every render (one `tail`), using a field Claude
+  Code does not document — if a Claude Code update drops it, `turn:` simply stops appearing.
+  매 렌더링마다 transcript 마지막 50줄을 읽으며(`tail` 1회) Claude Code가 문서화하지 않은 필드를 씁니다 —
+  업데이트로 필드가 사라지면 `turn:`이 조용히 안 보이게 될 뿐입니다.
+- It describes the **last response**: it appears with the turn's first response and stays until the next
+  turn's first response (submitting a prompt doesn't re-run the statusline). Right after `/effort`, it can
+  show the previous turn's level until the next response.
+  **마지막 응답** 기준입니다: 그 턴의 첫 응답부터 다음 턴의 첫 응답까지 보입니다(질문 제출은 statusline을
+  다시 그리지 않음). `/effort` 직후에는 다음 응답 전까지 이전 턴의 레벨이 보일 수 있습니다.
+- It cannot tell `ultrathink` from a skill.
+  `ultrathink`인지 skill인지는 구분하지 않습니다.
 
 ### Git Detail & PR/MR / Git 상세·PR/MR
 

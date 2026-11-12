@@ -94,3 +94,76 @@ ALL_ON="$(json_with 'Opus 5.5' ',"effort":{"level":"high"},"thinking":{"enabled"
   [ "$status" -eq 0 ]
   [[ "$(head -1 <<<"$output")" == *"Opus 5.5  v2.1.300  default"* ]]
 }
+
+# ---- STATUSLINE_SHOW_TURN_EFFORT (transcript tail) ----
+
+asst() {
+  printf '{"parentUuid":"p","isSidechain":%s,"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]},"effort":"%s","perTurnEffort":"%s"}' \
+    "${2:-false}" "${3:-hi}" "$1" "$1"
+}
+
+json_with_transcript() {
+  json_with 'Opus 5.5' ',"effort":{"level":"high"},"thinking":{"enabled":true},"transcript_path":"'"$1"'"'
+}
+
+@test "golden: turn effort is opt-in and off by default" {
+  t="$BATS_TEST_TMPDIR/t.jsonl"
+  asst xhigh >"$t"
+  run run_statusline "$(json_with_transcript "$t")"
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" == *"Opus 5.5 (high, thinking)  v2.1.300"* ]]
+}
+
+@test "golden: STATUSLINE_SHOW_TURN_EFFORT=1 adds turn:<v> when the last response ran higher" {
+  t="$BATS_TEST_TMPDIR/t.jsonl"
+  { asst high; echo; asst xhigh; echo; echo '{"type":"last-prompt"}'; echo '{"type":"mode","mode":"normal"}'; } >"$t"
+  run run_statusline "$(json_with_transcript "$t")" STATUSLINE_SHOW_TURN_EFFORT=1
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" == *"Opus 5.5 (high, turn:xhigh, thinking)  v2.1.300"* ]]
+}
+
+@test "golden: turn effort equal to the session level is not repeated" {
+  t="$BATS_TEST_TMPDIR/t.jsonl"
+  { asst xhigh; echo; asst high; echo; } >"$t"
+  run run_statusline "$(json_with_transcript "$t")" STATUSLINE_SHOW_TURN_EFFORT=1
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" == *"Opus 5.5 (high, thinking)  v2.1.300"* ]]
+}
+
+@test "golden: sidechain responses don't count as the main conversation's turn" {
+  t="$BATS_TEST_TMPDIR/t.jsonl"
+  { asst high; echo; asst max true; echo; } >"$t"
+  run run_statusline "$(json_with_transcript "$t")" STATUSLINE_SHOW_TURN_EFFORT=1
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" != *"turn:"* ]]
+}
+
+@test "golden: a perTurnEffort string inside message text is not mistaken for the field" {
+  t="$BATS_TEST_TMPDIR/t.jsonl"
+  printf '%s\n' '{"type":"assistant","isSidechain":false,"message":{"content":[{"type":"text","text":"{\"perTurnEffort\":\"max\"}"}]}}' >"$t"
+  run run_statusline "$(json_with_transcript "$t")" STATUSLINE_SHOW_TURN_EFFORT=1
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" != *"turn:"* ]]
+}
+
+@test "golden: compact layout leaves turn effort out" {
+  t="$BATS_TEST_TMPDIR/t.jsonl"
+  asst xhigh >"$t"
+  run run_statusline "$(json_with_transcript "$t")" STATUSLINE_SHOW_TURN_EFFORT=1 STATUSLINE_COMPACT=1
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" != *"turn:"* ]]
+}
+
+@test "golden: a missing transcript file renders without turn effort" {
+  run run_statusline "$(json_with_transcript "$BATS_TEST_TMPDIR/nope.jsonl")" STATUSLINE_SHOW_TURN_EFFORT=1
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" == *"Opus 5.5 (high, thinking)  v2.1.300"* ]]
+}
+
+@test "golden: STATUSLINE_SHOW_TURN_EFFORT=1 from the config file is honored" {
+  t="$BATS_TEST_TMPDIR/t.jsonl"
+  asst xhigh >"$t"
+  run run_statusline_with_config "$(json_with_transcript "$t")" "STATUSLINE_SHOW_TURN_EFFORT=1"
+  [ "$status" -eq 0 ]
+  [[ "$(head -1 <<<"$output")" == *"(high, turn:xhigh, thinking)"* ]]
+}
