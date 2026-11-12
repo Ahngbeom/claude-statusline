@@ -40,6 +40,9 @@
 #   STATUSLINE_SHOW_CC_VERSION=1/0   Line 1 CLI version (default 1)
 #   STATUSLINE_SHOW_OUTPUT_STYLE=1/0 Line 1 output style (default 1)
 #   STATUSLINE_SHOW_EFFORT=1/0       Line 1 "(high, thinking, fast)" after the model (default 1)
+#   STATUSLINE_SHOW_TURN_EFFORT=1/0  Add "turn:xhigh" when the last response ran at another
+#                                    level (ultrathink, a skill); reads the transcript tail
+#                                    (default 0, full layout only)
 #   STATUSLINE_SHOW_MEM=1/0          Line 1 memory indicator (default 1)
 #   STATUSLINE_SHOW_SESSION_CMD=1/0  Line 1 session launch flags (default 1)
 #   STATUSLINE_SESSION_CMD=<cmd>     Override the auto-detected launch command
@@ -451,6 +454,11 @@
 #     effort.level / thinking.enabled / fast_mode, so a mid-session /effort
 #     change shows up; the launch-time "⌘ effort:<v>" is dropped while the
 #     live level is shown. STATUSLINE_SHOW_EFFORT=0 turns it off.
+#   - STATUSLINE_SHOW_TURN_EFFORT=1 (off by default, full layout only) adds
+#     "turn:xhigh" when the most recent response ran at a level other than
+#     the session's, as with ultrathink or a skill's effort frontmatter:
+#     "Opus 5.5 (high, turn:xhigh, thinking)". It reads the transcript tail,
+#     an undocumented field, so it costs one `tail` per render.
 
 # Reads all of stdin without forking `cat`: read -d '' consumes up to EOF
 # (no NUL byte appears in JSON input) and populates $input directly.
@@ -475,7 +483,7 @@ if [ -f "$STATUSLINE_CONFIG_FILE" ]; then
       STATUSLINE_SHOW_GIT|STATUSLINE_SHOW_GIT_STATUS|STATUSLINE_SHOW_GIT_DETAIL|STATUSLINE_SHOW_CC_VERSION|STATUSLINE_SHOW_OUTPUT_STYLE|STATUSLINE_SHOW_MEM|\
       STATUSLINE_SHOW_SESSION_CMD|STATUSLINE_SESSION_CMD|STATUSLINE_SHOW_PR|STATUSLINE_HYPERLINKS|\
       STATUSLINE_SHOW_SESSION|STATUSLINE_SHOW_CACHE|STATUSLINE_SHOW_SPEED|STATUSLINE_SHOW_TODAY|STATUSLINE_SHOW_WEEK|STATUSLINE_SHOW_MONTH|\
-      STATUSLINE_PATH_MAX|STATUSLINE_PATH_LINK|STATUSLINE_SHOW_DELTA|STATUSLINE_THEME|STATUSLINE_SHOW_EFFORT)
+      STATUSLINE_PATH_MAX|STATUSLINE_PATH_LINK|STATUSLINE_SHOW_DELTA|STATUSLINE_THEME|STATUSLINE_SHOW_EFFORT|STATUSLINE_SHOW_TURN_EFFORT)
         [ -n "${!_cfg_key+x}" ] && continue
         printf -v "$_cfg_key" '%s' "$_cfg_val"
         ;;
@@ -920,6 +928,22 @@ _money_to_e4() {
   REPLY=$(( 10#$whole * 10000 + 10#${frac:0:4} ))
 }
 
+
+# ---- turn effort (transcript) ----
+# Sets REPLY to the effort the most recent main-conversation response ran at,
+# or "" when the transcript tail has none.
+_last_turn_effort() {
+  REPLY=""
+  local tail_txt line
+  # 50 lines reaches past the bookkeeping records written after a turn ends.
+  tail_txt="$(tail -n 50 -- "$1" 2>/dev/null)" || return 0
+  while IFS= read -r line; do
+    case "$line" in *'"type":"assistant"'*) ;; *) continue ;; esac
+    case "$line" in *'"isSidechain":true'*) continue ;; esac
+    [[ "$line" =~ \"perTurnEffort\":\"([a-z][a-z0-9_-]{0,11})\" ]] && REPLY="${BASH_REMATCH[1]}"
+  done <<< "$tail_txt"
+  return 0
+}
 
 # ---- session invocation (CLI argv) ----
 # Which flags this session was started with (`claude -c`, `--permission-mode
@@ -1412,6 +1436,10 @@ if [ "${STATUSLINE_SHOW_EFFORT:-1}" != "0" ]; then
   if [[ "$effort_level" =~ ^[a-z][a-z0-9_-]{0,11}$ ]]; then
     _ml="$effort_level"
     _sc_skip_effort=1
+    if [ "$_compact" -eq 0 ] && [ "${STATUSLINE_SHOW_TURN_EFFORT:-0}" = "1" ] && [ -f "$transcript_path" ]; then
+      _last_turn_effort "$transcript_path"
+      [ -n "$REPLY" ] && [ "$REPLY" != "$effort_level" ] && _ml="$_ml, turn:$REPLY"
+    fi
   fi
   if [ "$_compact" -eq 0 ]; then
     [ "$thinking_enabled" = "true" ] && _ml="${_ml:+$_ml, }thinking"
